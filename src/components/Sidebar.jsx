@@ -366,7 +366,7 @@ function Sidebar({
     } finally {
       setCreatingProject(false);
     }
-  };;
+  };
 
   const cancelNewProject = () => {
     setShowNewProject(false);
