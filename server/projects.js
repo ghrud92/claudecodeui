@@ -65,11 +65,7 @@ import crypto from 'crypto';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import os from 'os';
-
-// Get projects directory path from environment or default
-function getProjectsPath() {
-    return process.env.PROJECTS_PATH || path.join(process.env.HOME, '.claude', 'projects');
-}
+import { getProjectsPath } from './utils/paths.js';
 
 // Cache for extracted project directories
 const projectDirectoryCache = new Map();

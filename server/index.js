@@ -20,7 +20,7 @@ try {
         }
     });
 } catch (e) {
-    console.log('No .env file found or error reading it:', e.message);
+    console.log('.env file not found or could not be read - using environment variables');
 }
 
 console.log('PORT from env:', process.env.PORT);
@@ -30,6 +30,7 @@ import { WebSocketServer } from 'ws';
 import http from 'http';
 import cors from 'cors';
 import { promises as fsPromises } from 'fs';
+import fs from 'fs';
 import { spawn } from 'child_process';
 import os from 'os';
 import pty from 'node-pty';
@@ -45,6 +46,7 @@ import mcpRoutes from './routes/mcp.js';
 import cursorRoutes from './routes/cursor.js';
 import { initializeDatabase, userDb } from './database/db.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
+import { getProjectsPath, getClaudeDir } from './utils/paths.js';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 
@@ -52,18 +54,6 @@ import crypto from 'crypto';
 let projectsWatcher = null;
 const connectedClients = new Set();
 
-// Get projects directory path from environment or default
-function getProjectsPath() {
-    return process.env.PROJECTS_PATH || path.join(process.env.HOME, '.claude', 'projects');
-}
-
-// Get claude directory path from environment or default
-function getClaudeDir() {
-    if (process.env.PROJECTS_PATH) {
-        return path.dirname(process.env.PROJECTS_PATH);
-    }
-    return path.join(process.env.HOME, '.claude');
-}
 
 // Create initial user if none exists
 async function createInitialUser() {
@@ -92,8 +82,16 @@ async function createInitialUser() {
             console.log(`✅ Initial user created: ${user.username}`);
             
             if (!defaultPassword) {
-                console.log(`🔑 Generated random password: ${actualPassword}`);
-                console.log(`⚠️  IMPORTANT: Save this password securely! It won't be shown again.`);
+                // Write password to secure file instead of console
+                try {
+                    const passwordFilePath = path.join(getClaudeDir(), '.initial_password');
+                    await fsPromises.writeFile(passwordFilePath, `Initial admin password: ${actualPassword}\nGenerated at: ${new Date().toISOString()}\n\nIMPORTANT: Delete this file after changing the password!`);
+                    console.log(`🔑 Random password generated and saved to: ${passwordFilePath}`);
+                    console.log(`⚠️  SECURITY: Please change password immediately after first login!`);
+                } catch (error) {
+                    console.error('❌ Could not save password to file. Please set DEFAULT_PASSWORD in .env');
+                    throw error;
+                }
             } else {
                 console.log(`🔑 Using configured password from .env file`);
                 console.log(`⚠️  WARNING: Please change the default password after first login!`);
@@ -113,14 +111,22 @@ async function createDirectories() {
             const claudeDir = getClaudeDir();
             const projectsDir = getProjectsPath();
             
-            if (!fs.existsSync(claudeDir)) {
-                fs.mkdirSync(claudeDir, { recursive: true });
-                console.log(`📁 Created Claude directory: ${claudeDir}`);
+            try {
+                await fsPromises.access(claudeDir);
+            } catch (error) {
+                if (error.code === 'ENOENT') {
+                    await fsPromises.mkdir(claudeDir, { recursive: true });
+                    console.log(`📁 Created Claude directory: ${claudeDir}`);
+                }
             }
             
-            if (!fs.existsSync(projectsDir)) {
-                fs.mkdirSync(projectsDir, { recursive: true });
-                console.log(`📁 Created projects directory: ${projectsDir}`);
+            try {
+                await fsPromises.access(projectsDir);
+            } catch (error) {
+                if (error.code === 'ENOENT') {
+                    await fsPromises.mkdir(projectsDir, { recursive: true });
+                    console.log(`📁 Created projects directory: ${projectsDir}`);
+                }
             }
         }
     } catch (error) {
@@ -262,6 +268,15 @@ app.use('/api/cursor', authenticateToken, cursorRoutes);
 app.use(express.static(path.join(__dirname, '../dist')));
 
 // API Routes (protected)
+// Health check endpoint for Docker and monitoring
+app.get('/health', (req, res) => {
+    res.status(200).json({ 
+        status: 'healthy', 
+        timestamp: new Date().toISOString(),
+        version: process.env.npm_package_version || '1.0.0'
+    });
+});
+
 app.get('/api/config', authenticateToken, (req, res) => {
     const host = req.headers.host || `${req.hostname}:${PORT}`;
     const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'wss' : 'ws';
