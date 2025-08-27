@@ -21,6 +21,7 @@ export function getProjectsPath() {
         console.warn('⚠️  PROJECTS_PATH environment variable is deprecated and will be ignored.');
         console.warn('   Projects are now stored in ~/.claude/projects by default.');
         console.warn('   Please update your configuration and move existing projects if needed.');
+        console.warn('   Migration guide: https://github.com/ghrud92/claudecodeui/wiki/Migration-Guide');
     }
     
     const home = getHomeDirectory();
