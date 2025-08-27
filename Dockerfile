@@ -17,8 +17,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production && npm ci --only=development
+# Install all dependencies for build
+RUN npm ci
 
 # Copy source code
 COPY . .
@@ -29,12 +29,13 @@ RUN npm run build
 # Production stage
 FROM node:20.19.3-slim AS production
 
-# Install system dependencies for runtime
+# Install system dependencies for runtime and healthcheck
 RUN apt-get update && apt-get install -y \
     python3 \
     make \
     g++ \
     libsqlite3-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user

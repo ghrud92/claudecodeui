@@ -46,6 +46,7 @@ import cursorRoutes from './routes/cursor.js';
 import { initializeDatabase, userDb } from './database/db.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 
 // File system watcher for projects folder
 let projectsWatcher = null;
@@ -70,17 +71,33 @@ async function createInitialUser() {
         const hasUsers = userDb.hasUsers();
         
         if (!hasUsers) {
-            const defaultUsername = process.env.DEFAULT_USERNAME || 'admin';
-            const defaultPassword = process.env.DEFAULT_PASSWORD || 'admin123';
+            const defaultUsername = process.env.DEFAULT_USERNAME;
+            const defaultPassword = process.env.DEFAULT_PASSWORD;
+            
+            // Generate random password if not provided
+            const randomPassword = crypto.randomBytes(12).toString('base64').slice(0, 16);
+            const actualPassword = defaultPassword || randomPassword;
+            
+            if (!defaultUsername) {
+                console.log('⚠️  No DEFAULT_USERNAME set, skipping initial user creation');
+                console.log('   Set DEFAULT_USERNAME and DEFAULT_PASSWORD in .env file to enable');
+                return;
+            }
             
             console.log(`🔧 Creating initial user: ${defaultUsername}`);
             
-            const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+            const hashedPassword = await bcrypt.hash(actualPassword, 10);
             const user = userDb.createUser(defaultUsername, hashedPassword);
             
             console.log(`✅ Initial user created: ${user.username}`);
-            console.log(`🔑 Default password: ${defaultPassword}`);
-            console.log(`⚠️  Please change the default password after first login!`);
+            
+            if (!defaultPassword) {
+                console.log(`🔑 Generated random password: ${actualPassword}`);
+                console.log(`⚠️  IMPORTANT: Save this password securely! It won't be shown again.`);
+            } else {
+                console.log(`🔑 Using configured password from .env file`);
+                console.log(`⚠️  WARNING: Please change the default password after first login!`);
+            }
         } else {
             console.log('👤 Users already exist, skipping initial user creation');
         }
@@ -365,8 +382,17 @@ app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) =
         if (!filePath || !path.isAbsolute(filePath)) {
             return res.status(400).json({ error: 'Invalid file path' });
         }
+        
+        // Additional security: normalize and validate path
+        const normalizedPath = path.normalize(filePath);
+        const resolvedPath = path.resolve(normalizedPath);
+        
+        // Prevent directory traversal attacks
+        if (normalizedPath !== resolvedPath || normalizedPath.includes('..')) {
+            return res.status(403).json({ error: 'Access denied: Invalid path' });
+        }
 
-        const content = await fsPromises.readFile(filePath, 'utf8');
+        const content = await fsPromises.readFile(resolvedPath, 'utf8');
         res.json({ content, path: filePath });
     } catch (error) {
         console.error('Error reading file:', error);
@@ -395,10 +421,19 @@ app.get('/api/projects/:projectName/files/content', authenticateToken, async (re
         if (!filePath || !path.isAbsolute(filePath)) {
             return res.status(400).json({ error: 'Invalid file path' });
         }
+        
+        // Additional security: normalize and validate path
+        const normalizedPath = path.normalize(filePath);
+        const resolvedPath = path.resolve(normalizedPath);
+        
+        // Prevent directory traversal attacks
+        if (normalizedPath !== resolvedPath || normalizedPath.includes('..')) {
+            return res.status(403).json({ error: 'Access denied: Invalid path' });
+        }
 
         // Check if file exists
         try {
-            await fsPromises.access(filePath);
+            await fsPromises.access(resolvedPath);
         } catch (error) {
             return res.status(404).json({ error: 'File not found' });
         }
