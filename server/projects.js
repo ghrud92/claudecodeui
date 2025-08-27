@@ -676,11 +676,29 @@ async function addProjectManually(projectPath, displayName = null) {
     absolutePath = path.resolve(getProjectsPath(), projectPath);
   }
   
+  let directoryCreated = false;
   try {
     // Check if the path exists
     await fs.access(absolutePath);
   } catch (error) {
-    throw new Error(`Path does not exist: ${absolutePath}`);
+    if (error.code === 'ENOENT') {
+      // Path doesn't exist, try to create it
+      try {
+        await fs.mkdir(absolutePath, { recursive: true });
+        directoryCreated = true;
+        console.log(`Created directory: ${absolutePath}`);
+      } catch (createError) {
+        if (createError.code === 'EACCES') {
+          throw new Error(`Permission denied creating directory: ${absolutePath}`);
+        } else if (createError.code === 'ENOTDIR') {
+          throw new Error(`Cannot create directory - parent path is not a directory: ${absolutePath}`);
+        } else {
+          throw new Error(`Failed to create directory: ${absolutePath} - ${createError.message}`);
+        }
+      }
+    } else {
+      throw new Error(`Cannot access path: ${absolutePath} - ${error.message}`);
+    }
   }
   
   // Generate project name (encode path for use as directory name)
@@ -722,6 +740,7 @@ async function addProjectManually(projectPath, displayName = null) {
     fullPath: absolutePath,
     displayName: displayName || await generateDisplayName(projectName, absolutePath),
     isManuallyAdded: true,
+    directoryCreated: directoryCreated,
     sessions: [],
     cursorSessions: []
   };
