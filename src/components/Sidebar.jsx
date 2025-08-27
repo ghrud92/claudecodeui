@@ -340,14 +340,20 @@ function Sidebar({
 
       if (response.ok) {
         const result = await response.json();
+        
+        // Validate server response structure
+        if (!result.project) {
+          throw new Error('Invalid server response: missing project data');
+        }
+        
         setShowNewProject(false);
         setNewProjectPath('');
         
         // Show success message indicating if directory was created
-        if (result.project.directoryCreated) {
-          alert(`Project created successfully! Directory created at: ${result.project.path}`);
+        if (result.project?.directoryCreated) {
+          alert(`Project created successfully! Directory created at: ${result.project?.path}`);
         } else {
-          alert(`Project added successfully! Using existing directory: ${result.project.path}`);
+          alert(`Project added successfully! Using existing directory: ${result.project?.path}`);
         }
         
         // Refresh projects to show the new one
