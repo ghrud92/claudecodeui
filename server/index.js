@@ -43,17 +43,78 @@ import gitRoutes from './routes/git.js';
 import authRoutes from './routes/auth.js';
 import mcpRoutes from './routes/mcp.js';
 import cursorRoutes from './routes/cursor.js';
-import { initializeDatabase } from './database/db.js';
+import { initializeDatabase, userDb } from './database/db.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
+import bcrypt from 'bcrypt';
 
 // File system watcher for projects folder
 let projectsWatcher = null;
 const connectedClients = new Set();
 
+// Get projects directory path from environment or default
+function getProjectsPath() {
+    return process.env.PROJECTS_PATH || path.join(process.env.HOME, '.claude', 'projects');
+}
+
+// Get claude directory path from environment or default
+function getClaudeDir() {
+    if (process.env.PROJECTS_PATH) {
+        return path.dirname(process.env.PROJECTS_PATH);
+    }
+    return path.join(process.env.HOME, '.claude');
+}
+
+// Create initial user if none exists
+async function createInitialUser() {
+    try {
+        const hasUsers = userDb.hasUsers();
+        
+        if (!hasUsers) {
+            const defaultUsername = process.env.DEFAULT_USERNAME || 'admin';
+            const defaultPassword = process.env.DEFAULT_PASSWORD || 'admin123';
+            
+            console.log(`🔧 Creating initial user: ${defaultUsername}`);
+            
+            const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+            const user = userDb.createUser(defaultUsername, hashedPassword);
+            
+            console.log(`✅ Initial user created: ${user.username}`);
+            console.log(`🔑 Default password: ${defaultPassword}`);
+            console.log(`⚠️  Please change the default password after first login!`);
+        } else {
+            console.log('👤 Users already exist, skipping initial user creation');
+        }
+    } catch (error) {
+        console.error('❌ Error creating initial user:', error.message);
+    }
+}
+
+// Create necessary directories
+async function createDirectories() {
+    try {
+        if (process.env.AUTO_CREATE_DIRS === 'true') {
+            const claudeDir = getClaudeDir();
+            const projectsDir = getProjectsPath();
+            
+            if (!fs.existsSync(claudeDir)) {
+                fs.mkdirSync(claudeDir, { recursive: true });
+                console.log(`📁 Created Claude directory: ${claudeDir}`);
+            }
+            
+            if (!fs.existsSync(projectsDir)) {
+                fs.mkdirSync(projectsDir, { recursive: true });
+                console.log(`📁 Created projects directory: ${projectsDir}`);
+            }
+        }
+    } catch (error) {
+        console.error('❌ Error creating directories:', error.message);
+    }
+}
+
 // Setup file system watcher for Claude projects folder using chokidar
 async function setupProjectsWatcher() {
     const chokidar = (await import('chokidar')).default;
-    const claudeProjectsPath = path.join(process.env.HOME, '.claude', 'projects');
+    const claudeProjectsPath = getProjectsPath();
 
     if (projectsWatcher) {
         projectsWatcher.close();
@@ -1061,7 +1122,13 @@ async function startServer() {
     try {
         // Initialize authentication database
         await initializeDatabase();
-        console.log('✅ Database initialization skipped (testing)');
+        console.log('✅ Database initialized successfully');
+        
+        // Create necessary directories
+        await createDirectories();
+        
+        // Create initial user if none exists
+        await createInitialUser();
 
         server.listen(PORT, '0.0.0.0', async () => {
             console.log(`Claude Code UI server running on http://0.0.0.0:${PORT}`);
