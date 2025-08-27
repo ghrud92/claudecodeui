@@ -344,10 +344,10 @@ function Sidebar({
         setNewProjectPath('');
         
         // Show success message indicating if directory was created
-        if (result.directoryCreated) {
-          alert(`Project created successfully! Directory created at: ${result.path}`);
+        if (result.project.directoryCreated) {
+          alert(`Project created successfully! Directory created at: ${result.project.path}`);
         } else {
-          alert(`Project added successfully! Using existing directory: ${result.path}`);
+          alert(`Project added successfully! Using existing directory: ${result.project.path}`);
         }
         
         // Refresh projects to show the new one
@@ -366,7 +366,7 @@ function Sidebar({
     } finally {
       setCreatingProject(false);
     }
-  };
+  };;
 
   const cancelNewProject = () => {
     setShowNewProject(false);
@@ -519,7 +519,7 @@ function Sidebar({
             <Input
               value={newProjectPath}
               onChange={(e) => setNewProjectPath(e.target.value)}
-              placeholder=\"/path/to/project (will create if doesn't exist)\"
+              placeholder="/path/to/project (will create if doesn't exist)"
               className="text-sm focus:ring-2 focus:ring-primary/20"
               autoFocus
               onKeyDown={(e) => {
@@ -573,7 +573,7 @@ function Sidebar({
                 <Input
                   value={newProjectPath}
                   onChange={(e) => setNewProjectPath(e.target.value)}
-                  placeholder=\"/path/to/project (will create if doesn't exist)\"
+                  placeholder="/path/to/project (will create if doesn't exist)"
                   className="text-sm h-10 rounded-md focus:border-primary transition-colors"
                   autoFocus
                   onKeyDown={(e) => {
