@@ -1,22 +1,27 @@
 import path from 'path';
 import os from 'os';
 
-// Flag to track if we've warned about PROJECTS_PATH deprecation
+// Check for deprecated PROJECTS_PATH at module load time
+const PROJECTS_PATH_DEPRECATED = process.env.PROJECTS_PATH && process.env.PROJECTS_PATH.trim();
 let warnedAboutProjectsPath = false;
 
 // Get home directory with proper fallback and error handling
 function getHomeDirectory() {
-    const home = process.env.HOME || os.homedir();
-    if (!home) {
-        throw new Error('Unable to determine home directory. Please ensure HOME environment variable is set.');
+    try {
+        const home = process.env.HOME || os.homedir();
+        if (!home) {
+            throw new Error('Unable to determine home directory. Please ensure HOME environment variable is set.');
+        }
+        return home;
+    } catch (error) {
+        throw new Error(`Failed to get home directory: ${error.message}`);
     }
-    return home;
 }
 
 // Get projects directory path from environment or default
 export function getProjectsPath() {
     // Warn about deprecated PROJECTS_PATH usage (only once)
-    if (process.env.PROJECTS_PATH && process.env.PROJECTS_PATH.trim() && !warnedAboutProjectsPath) {
+    if (PROJECTS_PATH_DEPRECATED && !warnedAboutProjectsPath) {
         warnedAboutProjectsPath = true;
         console.warn('⚠️  PROJECTS_PATH environment variable is deprecated and will be ignored.');
         console.warn('   Projects are now stored in ~/.claude/projects by default.');
