@@ -700,7 +700,7 @@ async function addProjectManually(projectPath, displayName = null) {
   if (path.isAbsolute(projectPath)) {
     absolutePath = path.resolve(projectPath);
   } else {
-    // If it's a relative path, resolve it against PROJECTS_PATH
+    // If it's a relative path, resolve it against the projects directory
     absolutePath = path.resolve(getProjectsPath(), projectPath);
   }
   
