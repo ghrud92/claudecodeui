@@ -2,7 +2,7 @@ import path from 'path';
 import os from 'os';
 
 // Check for deprecated PROJECTS_PATH at module load time
-const PROJECTS_PATH_DEPRECATED = process.env.PROJECTS_PATH && process.env.PROJECTS_PATH.trim();
+const PROJECTS_PATH_DEPRECATED = process.env.PROJECTS_PATH?.trim();
 let warnedAboutProjectsPath = false;
 
 // Get home directory with proper fallback and error handling
@@ -14,7 +14,7 @@ function getHomeDirectory() {
         }
         return home;
     } catch (error) {
-        throw new Error(`Failed to get home directory: ${error.message}`);
+        throw new Error('Unable to access home directory. Please check your environment configuration.');
     }
 }
 
