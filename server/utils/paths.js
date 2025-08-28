@@ -3,7 +3,7 @@ import os from 'os';
 
 // Check for deprecated PROJECTS_PATH at module load time and warn immediately
 const PROJECTS_PATH_DEPRECATED = process.env.PROJECTS_PATH?.trim() || null;
-if (PROJECTS_PATH_DEPRECATED && process.env.NODE_ENV !== 'production') {
+if (PROJECTS_PATH_DEPRECATED && process.env.NODE_ENV === 'development') {
     // Only show detailed warning in development
     console.warn('⚠️  PROJECTS_PATH is deprecated. See: https://github.com/ghrud92/claudecodeui/wiki/Migration-Guide');
 }

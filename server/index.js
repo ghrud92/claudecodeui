@@ -92,7 +92,6 @@ async function createInitialUser() {
                     console.log(`⚠️  SECURITY: Please change password immediately after first login!`);
                 } catch (error) {
                     console.error('⚠️  Could not save password to file:', error.message);
-                    console.error('📋 Generated password (save this!):', actualPassword);
                     console.error('⚠️  IMPORTANT: Set DEFAULT_PASSWORD in .env to persist this password');
                     // Continue running - don't crash the server
                 }
