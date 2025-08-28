@@ -23,7 +23,10 @@ try {
     console.log('.env file not found or could not be read - using environment variables');
 }
 
-console.log('PORT from env:', process.env.PORT);
+// Only log environment variables in development for security
+if (process.env.NODE_ENV !== 'production') {
+    console.log('PORT from env:', process.env.PORT);
+}
 
 import express from 'express';
 import { WebSocketServer } from 'ws';
