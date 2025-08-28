@@ -67,6 +67,24 @@ import { open } from 'sqlite';
 import os from 'os';
 import { getProjectsPath, getClaudeDir } from './utils/paths.js';
 
+// Get platform-appropriate allowed base paths for security validation.
+// This is calculated once at module load time for performance.
+function getAllowedBasePaths() {
+    const homedir = os.homedir();
+    const paths = [homedir];
+
+    if (process.platform === 'win32') {
+        // Windows-specific paths
+        paths.push('C:\\Users', 'D:\\Users', 'C:\\Projects', 'D:\\Projects');
+    } else {
+        // Unix-like paths
+        paths.push('/home', '/Users', '/opt', '/workspace');
+    }
+
+    return paths;
+}
+const ALLOWED_BASE_PATHS = getAllowedBasePaths();
+
 // Cache for extracted project directories
 const projectDirectoryCache = new Map();
 
@@ -713,31 +731,14 @@ async function addProjectManually(projectPath, displayName = null) {
     throw new Error('Invalid path: directory traversal detected');
   }
   
-  // Security: Get platform-appropriate allowed base paths
-  function getAllowedBasePaths() {
-    const homedir = os.homedir();
-    const paths = [homedir];
-    
-    if (process.platform === 'win32') {
-      // Windows-specific paths
-      paths.push('C:\\Users', 'D:\\Users', 'C:\\Projects', 'D:\\Projects');
-    } else {
-      // Unix-like paths
-      paths.push('/home', '/Users', '/opt', '/workspace');
-    }
-    
-    return paths;
-  }
-  
   // Security: Strict path validation with platform support
-  const allowedPaths = getAllowedBasePaths();
-  const isPathAllowed = allowedPaths.some(basePath => {
+  const isPathAllowed = ALLOWED_BASE_PATHS.some(basePath => {
     const resolvedBase = path.resolve(basePath);
     return resolvedPath.startsWith(resolvedBase + path.sep) || resolvedPath === resolvedBase;
   });
   
   if (!isPathAllowed) {
-    const allowedPathsStr = allowedPaths.join(', ');
+    const allowedPathsStr = ALLOWED_BASE_PATHS.join(', ');
     throw new Error(`Path not allowed: must be within permitted directories (${allowedPathsStr})`);
   }
   
