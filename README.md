@@ -88,6 +88,24 @@ The application will start at the port you specified in your .env
 5. **Open your browser:**
    - Development: `http://localhost:3001`
 
+### Environment Variables
+
+The application uses environment variables for configuration. These are stored in a `.env` file in the project root. You can create this file by copying the example: `cp .env.example .env`.
+
+Below is a list of all the variables used by the application:
+
+| Variable           | Description                                                                                                 | Default / Example                        |
+|--------------------|-------------------------------------------------------------------------------------------------------------|------------------------------------------|
+| `PORT`             | The port on which the backend Express server will run.                                                      | `3001`                                   |
+| `VITE_PORT`        | The port for the frontend Vite development server.                                                          | `5173`                                   |
+| `JWT_SECRET`       | A secret key for signing JSON Web Tokens (JWTs) used for session authentication. **Must be changed for production.** | `claude-ui-dev-secret...` (dev only)     |
+| `API_KEY`          | An optional API key to provide an additional layer of security to the backend API. Uncomment to enable.       | (none)                                   |
+| `OPENAI_API_KEY`   | Your OpenAI API key. Required for the voice-to-text transcription feature (mic button).                       | `your-openai-api-key-here`               |
+| `DEFAULT_USERNAME` | If set, a default admin user with this username will be created on the first run.                             | `admin`                                  |
+| `DEFAULT_PASSWORD` | The password for the default admin user. Must be set if `DEFAULT_USERNAME` is used.                           | (none)                                   |
+| `NODE_ENV`         | The Node.js environment. Set to `production` to enable production optimizations.                              | `development`                            |
+
+
 ## Security & Tools Configuration
 
 **🔒 Important Notice**: All Claude Code tools are **disabled by default**. This prevents potentially harmful operations from running automatically.
