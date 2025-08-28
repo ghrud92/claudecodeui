@@ -49,6 +49,7 @@ describe('claude-cli', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    mockProcess?.removeAllListeners?.();
   });
 
   describe('spawnClaude', () => {
@@ -61,7 +62,7 @@ describe('claude-cli', () => {
 
       const spawnPromise = spawnClaude(command, options, mockWs);
       // Defer emitting 'close' to ensure listeners are attached
-      setTimeout(() => mockProcess.emit('close', 0), 0);
+      process.nextTick(() => mockProcess.emit('close', 0));
       await spawnPromise;
 
       expect(spawnFunction).toHaveBeenCalledOnce();
@@ -87,7 +88,7 @@ describe('claude-cli', () => {
 
       const spawnPromise = spawnClaude(command, options, mockWs);
       // Defer emitting 'close' to ensure listeners are attached
-      setTimeout(() => mockProcess.emit('close', 0), 0);
+      process.nextTick(() => mockProcess.emit('close', 0));
       await spawnPromise;
 
       expect(spawnFunction).toHaveBeenCalledOnce();
@@ -108,7 +109,7 @@ describe('claude-cli', () => {
 
         const spawnPromise = spawnClaude('', options, mockWs);
         // Defer emitting 'close' to ensure listeners are attached
-        setTimeout(() => mockProcess.emit('close', 0), 0);
+      process.nextTick(() => mockProcess.emit('close', 0));
         await spawnPromise;
 
         expect(spawnFunction).toHaveBeenCalledOnce();
@@ -118,6 +119,16 @@ describe('claude-cli', () => {
         expect(spawnArgs[1]).toContain('session-456');
         expect(mockProcess.stdin.write).not.toHaveBeenCalled();
         expect(mockProcess.stdin.end).not.toHaveBeenCalled();
+    });
+
+    it('should reject the promise when the process exits with a non-zero code', async () => {
+      const command = 'some failing command';
+      const options = {};
+      const spawnPromise = spawnClaude(command, options, mockWs);
+
+      process.nextTick(() => mockProcess.emit('close', 1)); // Emit error code
+
+      await expect(spawnPromise).rejects.toThrow('Claude CLI exited with code 1');
     });
   });
 });
