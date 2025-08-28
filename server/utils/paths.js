@@ -13,13 +13,14 @@ if (PROJECTS_PATH_DEPRECATED) {
 // Get home directory with proper fallback and error handling
 function getHomeDirectory() {
     try {
-        const home = process.env.HOME || os.homedir();
-        if (!home) {
-            throw new Error('Unable to determine home directory. Please ensure HOME environment variable is set.');
+        const home = os.homedir();
+        // Check for invalid home directory
+        if (!home || home === '/' || home === '\\') {
+            throw new Error('Invalid home directory detected');
         }
         return home;
     } catch (error) {
-        throw new Error('Unable to access home directory. Please check your environment configuration.');
+        throw new Error(`Unable to access home directory: ${error.message}`);
     }
 }
 

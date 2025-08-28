@@ -704,19 +704,41 @@ async function addProjectManually(projectPath, displayName = null) {
     absolutePath = path.resolve(getProjectsPath(), projectPath);
   }
   
-  // Security: Prevent path traversal attacks
+  // Security: Prevent path traversal attacks with strict validation
   const normalizedPath = path.normalize(absolutePath);
-  if (normalizedPath.includes('..') || normalizedPath !== absolutePath) {
+  const resolvedPath = path.resolve(absolutePath);
+  
+  // Check for path traversal attempts
+  if (normalizedPath.includes('..') || normalizedPath !== absolutePath || resolvedPath !== absolutePath) {
     throw new Error('Invalid path: directory traversal detected');
   }
   
-  // Security: Restrict to allowed base paths
-  const ALLOWED_BASE_PATHS = ['/home', '/Users', '/opt', '/workspace'];
-  const isPathAllowed = ALLOWED_BASE_PATHS.some(basePath => 
-    normalizedPath.startsWith(basePath)
-  );
+  // Security: Get platform-appropriate allowed base paths
+  function getAllowedBasePaths() {
+    const homedir = os.homedir();
+    const paths = [homedir];
+    
+    if (process.platform === 'win32') {
+      // Windows-specific paths
+      paths.push('C:\\Users', 'D:\\Users', 'C:\\Projects', 'D:\\Projects');
+    } else {
+      // Unix-like paths
+      paths.push('/home', '/Users', '/opt', '/workspace');
+    }
+    
+    return paths;
+  }
+  
+  // Security: Strict path validation with platform support
+  const allowedPaths = getAllowedBasePaths();
+  const isPathAllowed = allowedPaths.some(basePath => {
+    const resolvedBase = path.resolve(basePath);
+    return resolvedPath.startsWith(resolvedBase + path.sep) || resolvedPath === resolvedBase;
+  });
+  
   if (!isPathAllowed) {
-    throw new Error('Path not allowed: must be within permitted directories (/home, /Users, /opt, /workspace)');
+    const allowedPathsStr = allowedPaths.join(', ');
+    throw new Error(`Path not allowed: must be within permitted directories (${allowedPathsStr})`);
   }
   
   // Ensure directory exists (create if needed)
