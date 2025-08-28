@@ -712,11 +712,15 @@ function handleShellConnection(ws) {
                     const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
                     const shellArgs = os.platform() === 'win32' ? ['-Command', shellCommand] : ['-c', shellCommand];
 
+                    // Get safe home directory for shell cwd
+                    const homeDir = process.env.HOME || os.homedir() || 
+                                   (os.platform() === 'win32' ? process.env.USERPROFILE : '/');
+
                     shellProcess = pty.spawn(shell, shellArgs, {
                         name: 'xterm-256color',
                         cols: 80,
                         rows: 24,
-                        cwd: process.env.HOME || (os.platform() === 'win32' ? process.env.USERPROFILE : '/'),
+                        cwd: homeDir,
                         env: {
                             ...process.env,
                             TERM: 'xterm-256color',

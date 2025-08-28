@@ -2,7 +2,7 @@ import path from 'path';
 import os from 'os';
 
 // Check for deprecated PROJECTS_PATH at module load time
-const PROJECTS_PATH_DEPRECATED = process.env.PROJECTS_PATH?.trim();
+const PROJECTS_PATH_DEPRECATED = process.env.PROJECTS_PATH?.trim() || null;
 let warnedAboutProjectsPath = false;
 
 // Get home directory with proper fallback and error handling

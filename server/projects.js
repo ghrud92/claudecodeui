@@ -65,7 +65,7 @@ import crypto from 'crypto';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import os from 'os';
-import { getProjectsPath } from './utils/paths.js';
+import { getProjectsPath, getClaudeDir } from './utils/paths.js';
 
 // Cache for extracted project directories
 const projectDirectoryCache = new Map();
@@ -77,7 +77,7 @@ function clearProjectDirectoryCache() {
 
 // Load project configuration file
 async function loadProjectConfig() {
-  const configPath = path.join(process.env.HOME, '.claude', 'project-config.json');
+  const configPath = path.join(getClaudeDir(), 'project-config.json');
   try {
     const configData = await fs.readFile(configPath, 'utf8');
     return JSON.parse(configData);
@@ -89,7 +89,7 @@ async function loadProjectConfig() {
 
 // Save project configuration file
 async function saveProjectConfig(config) {
-  const claudeDir = path.join(process.env.HOME, '.claude');
+  const claudeDir = getClaudeDir();
   const configPath = path.join(claudeDir, 'project-config.json');
   
   // Ensure the .claude directory exists
