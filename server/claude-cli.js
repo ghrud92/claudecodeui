@@ -22,16 +22,22 @@ async function spawnClaude(command, options = {}, ws) {
       skipPermissions: false
     };
     
-    // Build Claude CLI command - start with print/resume flags first
+    // Build Claude CLI command
     const args = [];
+    let commandForStdin = null; // Command to be passed to stdin
     
-    // Add print flag with command if we have a command
-    if (command && command.trim()) {
-
-      // Separate arguments for better cross-platform compatibility
-      // This prevents issues with spaces and quotes on Windows
-      args.push('--print');
-      args.push(command);
+    // If resuming a session, command goes to stdin. Otherwise, use --print.
+    if (resume && sessionId) {
+      args.push('--resume', sessionId);
+      if (command && command.trim()) {
+        commandForStdin = command;
+      }
+    } else {
+      // For new sessions, use the --print argument
+      if (command && command.trim()) {
+        args.push('--print');
+        args.push(command);
+      }
     }
     
     // Use cwd (actual project directory) instead of projectPath (Claude's metadata directory)
@@ -66,27 +72,23 @@ async function spawnClaude(command, options = {}, ws) {
         }
         
         // Include the full image paths in the prompt for Claude to reference
-        // Only modify the command if we actually have images and a command
-        if (tempImagePaths.length > 0 && command && command.trim()) {
-          const imageNote = `\n\n[Images provided at the following paths:]\n${tempImagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
-          const modifiedCommand = command + imageNote;
-          
-          // Update the command in args - now that --print and command are separate
-          const printIndex = args.indexOf('--print');
-          if (printIndex !== -1 && printIndex + 1 < args.length && args[printIndex + 1] === command) {
-            args[printIndex + 1] = modifiedCommand;
-          }
+        if (tempImagePaths.length > 0 && (commandForStdin || (command && command.trim()))) {
+            const imageNote = `\n\n[Images provided at the following paths:]\n${tempImagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
+
+            if (commandForStdin) {
+                commandForStdin += imageNote;
+            } else {
+                const modifiedCommand = command + imageNote;
+                const printIndex = args.indexOf('--print');
+                if (printIndex !== -1 && printIndex + 1 < args.length) {
+                    args[printIndex + 1] = modifiedCommand;
+                }
+            }
         }
-        
         
       } catch (error) {
         console.error('Error processing images for Claude:', error);
       }
-    }
-    
-    // Add resume flag if resuming
-    if (resume && sessionId) {
-      args.push('--resume', sessionId);
     }
     
     // Add basic flags
@@ -358,19 +360,16 @@ async function spawnClaude(command, options = {}, ws) {
       reject(error);
     });
     
-    // Handle stdin for interactive mode
-    if (command) {
-      // For --print mode with arguments, we don't need to write to stdin
+    // Handle stdin
+    if (commandForStdin) {
+      // Resuming session, write command to stdin
+      claudeProcess.stdin.write(commandForStdin + '\n');
       claudeProcess.stdin.end();
-    } else {
-      // For interactive mode, we need to write the command to stdin if provided later
-      // Keep stdin open for interactive session
-      if (command !== undefined) {
-        claudeProcess.stdin.write(command + '\n');
-        claudeProcess.stdin.end();
-      }
-      // If no command provided, stdin stays open for interactive use
+    } else if (command) {
+      // New session with --print, no stdin needed
+      claudeProcess.stdin.end();
     }
+    // If no command and no commandForStdin, it's an interactive session, so leave stdin open.
   });
 }
 
