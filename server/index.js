@@ -1035,6 +1035,42 @@ app.post('/api/projects/:projectName/upload-images', authenticateToken, async (r
             }
         });
 
+        // Function to validate actual file content by magic bytes
+        const validateImageContent = async (filePath, mimeType) => {
+            try {
+                const buffer = await fs.readFile(filePath);
+                
+                // Check minimum file size
+                if (buffer.length < 8) {
+                    return false;
+                }
+                
+                // Validate file headers (magic bytes)
+                const header = buffer.subarray(0, 12);
+                
+                switch (mimeType) {
+                    case 'image/jpeg':
+                        return header[0] === 0xFF && header[1] === 0xD8 && header[2] === 0xFF;
+                    case 'image/png':
+                        return header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47;
+                    case 'image/gif':
+                        return (header[0] === 0x47 && header[1] === 0x49 && header[2] === 0x46) &&
+                               (header[3] === 0x38 && (header[4] === 0x37 || header[4] === 0x39));
+                    case 'image/webp':
+                        return header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46 &&
+                               header[8] === 0x57 && header[9] === 0x45 && header[10] === 0x42 && header[11] === 0x50;
+                    case 'image/svg+xml':
+                        const content = buffer.toString('utf8', 0, Math.min(200, buffer.length));
+                        return content.includes('<svg') || content.includes('<?xml');
+                    default:
+                        return false;
+                }
+            } catch (error) {
+                console.error('❌ Error validating image content:', error);
+                return false;
+            }
+        };
+
         const fileFilter = (req, file, cb) => {
             const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];
             if (allowedMimes.includes(file.mimetype)) {
@@ -1064,23 +1100,36 @@ app.post('/api/projects/:projectName/upload-images', authenticateToken, async (r
             }
 
             try {
-                // Process uploaded images
+                // Process uploaded images with content validation
                 const processedImages = await Promise.all(
                     req.files.map(async (file) => {
-                        // Read file and convert to base64
-                        const buffer = await fs.readFile(file.path);
-                        const base64 = buffer.toString('base64');
-                        const mimeType = file.mimetype;
+                        try {
+                            // Validate actual file content by magic bytes
+                            const isValidContent = await validateImageContent(file.path, file.mimetype);
+                            if (!isValidContent) {
+                                await fs.unlink(file.path).catch(() => {}); // Clean up on validation failure
+                                throw new Error(`Invalid image content for file: ${file.originalname}`);
+                            }
 
-                        // Clean up temp file immediately
-                        await fs.unlink(file.path);
+                            // Read file and convert to base64
+                            const buffer = await fs.readFile(file.path);
+                            const base64 = buffer.toString('base64');
+                            const mimeType = file.mimetype;
 
-                        return {
-                            name: file.originalname,
-                            data: `data:${mimeType};base64,${base64}`,
-                            size: file.size,
-                            mimeType: mimeType
-                        };
+                            // Clean up temp file immediately
+                            await fs.unlink(file.path);
+
+                            return {
+                                name: file.originalname,
+                                data: `data:${mimeType};base64,${base64}`,
+                                size: file.size,
+                                mimeType: mimeType
+                            };
+                        } catch (error) {
+                            // Ensure cleanup on any error
+                            await fs.unlink(file.path).catch(() => {});
+                            throw error;
+                        }
                     })
                 );
 

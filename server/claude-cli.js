@@ -7,14 +7,130 @@ import os from 'os';
 // Use cross-spawn on Windows for better command execution
 let activeClaudeProcesses = new Map(); // Track active processes by session ID
 
+// Helper function to build Claude CLI arguments
+function buildClaudeArgs(options, settings) {
+  const { sessionId, command, resume, permissionMode, images } = options;
+  const trimmedCommand = command ? command.trim() : '';
+  
+  const args = [];
+  let commandForStdin = null;
+  
+  if (resume && sessionId) {
+    args.push('--resume', sessionId);
+    if (trimmedCommand) {
+      commandForStdin = trimmedCommand;
+    }
+  } else {
+    if (trimmedCommand) {
+      commandForStdin = trimmedCommand;
+    }
+  }
+  
+  // Add images if provided
+  if (images && images.length > 0) {
+    for (const image of images) {
+      args.push('--image', image);
+    }
+  }
+  
+  // Add permission mode
+  if (permissionMode && permissionMode !== 'default') {
+    args.push('--permission-mode', permissionMode);
+  }
+  
+  // Handle tool permissions
+  if (settings.skipPermissions && permissionMode !== 'plan') {
+    args.push('--dangerously-skip-permissions');
+  } else {
+    let allowedTools = [...(settings.allowedTools || [])];
+    if (permissionMode === 'plan') {
+      const planModeTools = ['Read', 'Task', 'exit_plan_mode', 'TodoRead', 'TodoWrite'];
+      for (const tool of planModeTools) {
+        if (!allowedTools.includes(tool)) {
+          allowedTools.push(tool);
+        }
+      }
+    }
+    allowedTools.forEach(tool => args.push('--allowedTools', tool));
+    (settings.disallowedTools || []).forEach(tool => args.push('--disallowedTools', tool));
+  }
+  
+  return { args, commandForStdin };
+}
+
+// Helper function to handle stdout data processing
+function processStdoutData(data, ws, sessionId, processKey, sessionState) {
+  const rawOutput = data.toString();
+  const lines = rawOutput.split('\n').filter(line => line.trim());
+  
+  for (const line of lines) {
+    // Quick check if line looks like JSON before parsing (performance optimization)
+    const trimmedLine = line.trim();
+    if (trimmedLine.startsWith('{') && trimmedLine.endsWith('}')) {
+      try {
+        const response = JSON.parse(trimmedLine);
+      
+        // Handle session ID capture with race condition protection
+        if (response.session_id && !sessionState.capturedSessionId) {
+          sessionState.capturedSessionId = response.session_id;
+          
+          // Atomically update the process entry
+          const entry = activeClaudeProcesses.get(processKey);
+          if (entry && !entry.capturedSessionId) {
+            entry.capturedSessionId = sessionState.capturedSessionId;
+            
+            // Send session-created event if we get a new sessionId from Claude CLI
+            if (!sessionState.sessionCreatedSent && sessionState.capturedSessionId !== sessionId) {
+              sessionState.sessionCreatedSent = true;
+              console.log(`📋 Session ID updated: ${sessionId} -> ${sessionState.capturedSessionId}`);
+              
+              // Use setImmediate to ensure WebSocket message is sent after current processing
+              setImmediate(() => {
+                if (ws && ws.readyState === 1) {
+                  ws.send(JSON.stringify({ type: 'session-created', sessionId: sessionState.capturedSessionId }));
+                }
+              });
+            }
+          }
+        }
+        
+        ws.send(JSON.stringify({ type: 'claude-response', data: response }));
+      } catch (parseError) {
+        // If JSON parsing fails, send as plain text
+        ws.send(JSON.stringify({ type: 'claude-output', data: trimmedLine }));
+      }
+    } else {
+      // Line doesn't look like JSON, send as plain text
+      ws.send(JSON.stringify({ type: 'claude-output', data: trimmedLine }));
+    }
+  }
+}
+
+// Helper function to setup process cleanup
+function setupProcessCleanup(claudeProcess, processKey, cleanup) {
+  claudeProcess.on('close', (code, signal) => {
+    console.log(`🏁 Claude process exited with code ${code}, signal: ${signal}`);
+    activeClaudeProcesses.delete(processKey);
+    cleanup && cleanup();
+  });
+
+  claudeProcess.on('error', (error) => {
+    console.error('❌ Error starting Claude CLI:', error);
+    activeClaudeProcesses.delete(processKey);
+    cleanup && cleanup();
+  });
+}
+
 async function spawnClaude(command, options = {}, ws) {
   const spawnFunction = process.platform === 'win32' ? crossSpawn.default : child_process.spawn;
   return new Promise(async (resolve, reject) => {
-    const { sessionId, projectPath, cwd, resume, toolsSettings, permissionMode, images } = options;
-    let capturedSessionId = null; // Will be set once the process starts
-    let sessionCreatedSent = false;
+    const { sessionId, cwd, toolsSettings } = options;
     
-    const trimmedCommand = command ? command.trim() : '';
+    // Session state for handling race conditions
+    const sessionState = {
+      capturedSessionId: null,
+      sessionCreatedSent: false
+    };
 
     const settings = toolsSettings || {
       allowedTools: [],
@@ -22,19 +138,11 @@ async function spawnClaude(command, options = {}, ws) {
       skipPermissions: false
     };
     
-    const args = [];
-    let commandForStdin = null;
-    
-    if (resume && sessionId) {
-      args.push('--resume', sessionId);
-      if (trimmedCommand) {
-        commandForStdin = trimmedCommand;
-      }
-    } else {
-      if (trimmedCommand) {
-        args.push('--print', trimmedCommand);
-      }
-    }
+    // Build arguments using helper function
+    const { args, commandForStdin } = buildClaudeArgs({ 
+      ...options, 
+      command 
+    }, settings);
     
     const workingDir = cwd || process.cwd();
     
@@ -154,28 +262,45 @@ async function spawnClaude(command, options = {}, ws) {
       const lines = rawOutput.split('\n').filter(line => line.trim());
       
       for (const line of lines) {
-        try {
-          const response = JSON.parse(line);
+        // Quick check if line looks like JSON before parsing (performance optimization)
+        const trimmedLine = line.trim();
+        if (trimmedLine.startsWith('{') && trimmedLine.endsWith('}')) {
+          try {
+            const response = JSON.parse(trimmedLine);
           
+          // Handle session ID capture with race condition protection
           if (response.session_id && !capturedSessionId) {
             capturedSessionId = response.session_id;
-            const entry = activeClaudeProcesses.get(processKey);
-            if (entry) {
-              entry.capturedSessionId = capturedSessionId;
-            }
             
-            // Send session-created event if we get a new sessionId from Claude CLI
-            // This happens both for new sessions and when --resume returns a different sessionId
-            if (!sessionCreatedSent && capturedSessionId !== sessionId) {
-              sessionCreatedSent = true;
-              console.log(`📋 Session ID updated: ${sessionId} -> ${capturedSessionId}`);
-              ws.send(JSON.stringify({ type: 'session-created', sessionId: capturedSessionId }));
+            // Atomically update the process entry
+            const entry = activeClaudeProcesses.get(processKey);
+            if (entry && !entry.capturedSessionId) {
+              entry.capturedSessionId = capturedSessionId;
+              
+              // Send session-created event if we get a new sessionId from Claude CLI
+              // This happens both for new sessions and when --resume returns a different sessionId
+              if (!sessionCreatedSent && capturedSessionId !== sessionId) {
+                sessionCreatedSent = true;
+                console.log(`📋 Session ID updated: ${sessionId} -> ${capturedSessionId}`);
+                
+                // Use setImmediate to ensure WebSocket message is sent after current processing
+                setImmediate(() => {
+                  if (ws && ws.readyState === 1) { // Check WebSocket is still open
+                    ws.send(JSON.stringify({ type: 'session-created', sessionId: capturedSessionId }));
+                  }
+                });
+              }
             }
           }
           
-          ws.send(JSON.stringify({ type: 'claude-response', data: response }));
-        } catch (parseError) {
-          ws.send(JSON.stringify({ type: 'claude-output', data: line }));
+            ws.send(JSON.stringify({ type: 'claude-response', data: response }));
+          } catch (parseError) {
+            // If JSON parsing fails, send as plain text
+            ws.send(JSON.stringify({ type: 'claude-output', data: trimmedLine }));
+          }
+        } else {
+          // Line doesn't look like JSON, send as plain text
+          ws.send(JSON.stringify({ type: 'claude-output', data: trimmedLine }));
         }
       }
     });
@@ -184,8 +309,14 @@ async function spawnClaude(command, options = {}, ws) {
       ws.send(JSON.stringify({ type: 'claude-error', error: data.toString() }));
     });
     
-    claudeProcess.on('close', async (code) => {
+    // Setup process cleanup using helper function
+    setupProcessCleanup(claudeProcess, processKey, async () => {
       await cleanup();
+    });
+
+    // Add completion handlers
+    claudeProcess.on('close', async (code) => {
+      const trimmedCommand = command ? command.trim() : '';
       ws.send(JSON.stringify({ type: 'claude-complete', exitCode: code, isNewSession: !sessionId && !!trimmedCommand }));
       if (code === 0) {
         resolve();
@@ -195,7 +326,6 @@ async function spawnClaude(command, options = {}, ws) {
     });
     
     claudeProcess.on('error', async (error) => {
-      await cleanup();
       ws.send(JSON.stringify({ type: 'claude-error', error: error.message }));
       reject(error);
     });
