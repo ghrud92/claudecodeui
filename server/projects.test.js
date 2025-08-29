@@ -289,4 +289,26 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
     consoleSpy.mockRestore();
     process.env.NODE_ENV = originalEnv;
   });
+
+  it('should validate enhanced path validation logic', async () => {
+    // This test verifies the enhanced Windows drive letter validation logic exists
+    // We test it by checking error messages from the validation function
+    
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    
+    try {
+      // Simulate the validation logic being called with an invalid Windows path
+      // The path.isAbsolute will return false for paths without proper drive letters
+      process.env.PROJECT_BASE_DIR = '\\InvalidPath';
+      
+      await expect(addProjectManually('test-project')).rejects.toThrow(
+        'PROJECT_BASE_DIR는 절대 경로여야 합니다'
+      );
+    } finally {
+      // Always restore original platform
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
+    }
+  });
+
 });

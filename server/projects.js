@@ -98,8 +98,13 @@ function getDangerousPaths() {
 
 // Centralized BASE_DIR validation function for reusability
 function validateBaseDir(baseDir) {
-  // 절대 경로 검증
+  // 크로스 플랫폼 절대 경로 검증 개선
   if (!path.isAbsolute(baseDir)) {
+    throw new Error('PROJECT_BASE_DIR는 절대 경로여야 합니다');
+  }
+  
+  // Windows 추가 검증: 드라이브 문자 필요
+  if (process.platform === 'win32' && !baseDir.match(/^[A-Za-z]:\\/)) {
     throw new Error('PROJECT_BASE_DIR는 절대 경로여야 합니다');
   }
   
@@ -113,8 +118,22 @@ function validateBaseDir(baseDir) {
   return normalizedBaseDir;
 }
 
-// Pre-validated and normalized BASE_DIR for performance
-const VALIDATED_BASE_DIR = validateBaseDir(process.env.PROJECT_BASE_DIR || '/workspace');
+// Lazy initialization cache for BASE_DIR validation
+let _cachedBaseDir = null;
+let _lastEnvValue = null;
+
+// Get validated BASE_DIR with lazy initialization and environment change detection
+function getValidatedBaseDir() {
+  const currentEnvValue = process.env.PROJECT_BASE_DIR || '/workspace';
+  
+  // Re-validate if environment changed or cache is empty
+  if (_cachedBaseDir === null || _lastEnvValue !== currentEnvValue) {
+    _cachedBaseDir = validateBaseDir(currentEnvValue);
+    _lastEnvValue = currentEnvValue;
+  }
+  
+  return _cachedBaseDir;
+}
 
 // Clear cache when needed (called when project files change)
 function clearProjectDirectoryCache() {
@@ -741,23 +760,24 @@ async function ensureDirectoryExists(absolutePath) {
           throw new Error(`디렉토리 생성 실패: ${absolutePath} - ${createError.message}`);
         }
       }
+    } else if (error.code === 'EACCES') {
+      throw new Error(`디렉토리 접근이 거부되었습니다: ${absolutePath}`);
     } else {
-      throw new Error(`Cannot access path: ${absolutePath} - ${error.message}`);
+      throw new Error(`경로에 접근할 수 없습니다: ${absolutePath} - ${error.message}`);
     }
   }
 }
 
-async function addProjectManually(projectPath, displayName = null) {
-  // 개발/디버그 모드에서만 로깅
+// Validate project input and extract clean project name
+function validateProjectInput(projectPath) {
   if (process.env.NODE_ENV === 'development') {
-    console.debug('🚀 addProjectManually called with:', projectPath);
+    console.debug('🚀 validateProjectInput called with:', projectPath);
   }
   
-  // Extract project name and validate basic requirements first
   const trimmedPath = projectPath.trim();
   const inputName = path.basename(trimmedPath);
   
-  // Validate project name first (empty, dots)
+  // Validate project name (empty, dots)
   if (!inputName || inputName === '.' || inputName === '..') {
     throw new Error('유효하지 않은 프로젝트 이름입니다. 올바른 디렉토리 이름을 제공해주세요.');
   }
@@ -770,21 +790,19 @@ async function addProjectManually(projectPath, displayName = null) {
       trimmedPath.includes('..\\')) {
     throw new Error('유효하지 않은 프로젝트 경로입니다. 디렉토리 순회 시도는 허용되지 않습니다.');
   }
+  
   if (process.env.NODE_ENV === 'development') {
-    console.debug('📝 Extracted input name:', inputName);
+    console.debug('📝 Validated input name:', inputName);
   }
   
-  // Use centralized validation function for consistency and test flexibility
-  const baseDir = validateBaseDir(process.env.PROJECT_BASE_DIR || '/workspace');
-  const absolutePath = path.resolve(baseDir, inputName);
-  if (process.env.NODE_ENV === 'development') {
-    console.debug('🎯 Project being created in configured base directory');
-  }
-  
+  return inputName;
+}
+
+// Perform comprehensive security validation on project path
+async function validateProjectSecurity(absolutePath, baseDir) {
   // Security: Enhanced path validation using pre-normalized base directory
   const normalizedAbsolute = path.normalize(absolutePath);
-  // baseDir is already validated and normalized, no need to re-normalize
-  const normalizedBase = baseDir;
+  const normalizedBase = baseDir; // Already validated and normalized
   
   // Cross-platform path validation using normalized paths
   if (!normalizedAbsolute.startsWith(normalizedBase + path.sep)) {
@@ -803,23 +821,24 @@ async function addProjectManually(projectPath, displayName = null) {
     }
   } catch (error) {
     // If realpath fails (directory doesn't exist), that's expected for new projects
-    // We'll create the directory later, so this is not an error
     if (error.code !== 'ENOENT') {
       throw new Error(`보안 검증 실패: ${error.message}`);
     }
   }
-  
-  // Ensure directory exists (create if needed)
-  const { directoryCreated } = await ensureDirectoryExists(absolutePath);
-  
-  // Generate project identifier (encode path for use as directory name)
+}
+
+// Create project directory and return creation status
+async function createProjectDirectory(absolutePath) {
+  return await ensureDirectoryExists(absolutePath);
+}
+
+// Update project configuration with new project
+async function updateProjectConfig(absolutePath, displayName) {
   const projectIdentifier = absolutePath.replace(/\//g, '-');
-  
-  // Check if project already exists in config
   const config = await loadProjectConfig();
   
   if (config[projectIdentifier]) {
-    throw new Error(`Project already configured for path: ${absolutePath}`);
+    throw new Error(`프로젝트가 이미 설정되어 있습니다: ${absolutePath}`);
   }
   
   // Add to config as manually added project
@@ -833,8 +852,32 @@ async function addProjectManually(projectPath, displayName = null) {
   }
   
   await saveProjectConfig(config);
+  return projectIdentifier;
+}
+
+// Main function - orchestrates project creation process
+async function addProjectManually(projectPath, displayName = null) {
+  // Step 1: Validate and extract project input
+  const inputName = validateProjectInput(projectPath);
   
+  // Step 2: Get validated base directory with lazy initialization
+  const baseDir = getValidatedBaseDir();
+  const absolutePath = path.resolve(baseDir, inputName);
   
+  if (process.env.NODE_ENV === 'development') {
+    console.debug('🎯 Project being created in configured base directory');
+  }
+  
+  // Step 3: Perform comprehensive security validation
+  await validateProjectSecurity(absolutePath, baseDir);
+  
+  // Step 4: Create project directory
+  const { directoryCreated } = await createProjectDirectory(absolutePath);
+  
+  // Step 5: Update project configuration
+  const projectIdentifier = await updateProjectConfig(absolutePath, displayName);
+  
+  // Step 6: Return project information
   return {
     name: projectIdentifier,
     path: absolutePath,
