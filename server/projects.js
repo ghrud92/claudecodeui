@@ -786,33 +786,69 @@ function validateProjectInput(projectPath) {
   return inputName;
 }
 
-// Perform comprehensive security validation on project path
-async function validateProjectSecurity(absolutePath, baseDir) {
-  // Security: Enhanced path validation using pre-normalized base directory
-  const normalizedAbsolute = path.normalize(absolutePath);
-  const normalizedBase = baseDir; // Already validated and normalized
+// Recursively validate path chain to prevent symbolic link bypass
+async function validatePathChainSecurity(targetPath, baseDir) {
+  const normalizedBase = path.normalize(baseDir);
+  let currentPath = path.normalize(targetPath);
+  const checkedPaths = new Set(); // Prevent infinite loops
+  const resolvedPaths = new Set(); // Track resolved paths for circular detection
+  let iterations = 0;
+  const maxIterations = 20; // Prevent infinite loops
   
-  // Cross-platform path validation using normalized paths
-  if (!normalizedAbsolute.startsWith(normalizedBase + path.sep)) {
-    throw new Error(`보안 위반: 프로젝트 경로가 허용된 기본 디렉토리를 벗어났습니다 '${baseDir}'`);
-  }
-  
-  // Security: Resolve symbolic links to prevent traversal attacks
-  try {
-    const parentDir = path.dirname(absolutePath);
-    if (parentDir && parentDir !== '.' && parentDir !== '/') {
-      const realParentPath = await fs.realpath(parentDir);
-      const realNormalizedPath = path.normalize(realParentPath);
-      if (!realNormalizedPath.startsWith(normalizedBase + path.sep)) {
+  while (currentPath !== normalizedBase && currentPath !== '/' && currentPath !== path.parse(currentPath).root) {
+    // Safety: Prevent infinite loops with iteration limit
+    if (++iterations > maxIterations) {
+      throw new Error('보안 위반: 순환 심볼릭 링크가 감지되었습니다');
+    }
+    
+    // Prevent infinite loops from circular symbolic links
+    if (checkedPaths.has(currentPath)) {
+      throw new Error('보안 위반: 순환 심볼릭 링크가 감지되었습니다');
+    }
+    checkedPaths.add(currentPath);
+    
+    try {
+      // Atomically resolve and validate each path component
+      const realPath = await fs.realpath(currentPath);
+      const normalizedReal = path.normalize(realPath);
+      
+      // Check if resolved path is still within base directory
+      if (!normalizedReal.startsWith(normalizedBase + path.sep) && normalizedReal !== normalizedBase) {
         throw new Error('보안 위반: 심볼릭 링크를 통한 디렉토리 순회 시도가 감지되었습니다');
       }
-    }
-  } catch (error) {
-    // If realpath fails (directory doesn't exist), that's expected for new projects
-    if (error.code !== 'ENOENT') {
+      
+      // Check for circular references in resolved paths
+      if (resolvedPaths.has(normalizedReal)) {
+        throw new Error('보안 위반: 순환 심볼릭 링크가 감지되었습니다');
+      }
+      resolvedPaths.add(normalizedReal);
+      
+      // Move to parent of resolved path to continue chain validation
+      currentPath = path.dirname(normalizedReal);
+    } catch (error) {
+      // If realpath fails (directory doesn't exist), check parent instead
+      if (error.code === 'ENOENT') {
+        currentPath = path.dirname(currentPath);
+        continue;
+      }
       throw new Error(`보안 검증 실패: ${error.message}`);
     }
   }
+}
+
+// Perform comprehensive atomic security validation on project path
+async function validateProjectSecurity(absolutePath, baseDir) {
+  // Security: Enhanced atomic path validation using consistent normalization
+  const normalizedAbsolute = path.normalize(absolutePath);
+  const normalizedBase = path.normalize(baseDir);
+  
+  // Initial path boundary check
+  if (!normalizedAbsolute.startsWith(normalizedBase + path.sep) && normalizedAbsolute !== normalizedBase) {
+    throw new Error(`보안 위반: 프로젝트 경로가 허용된 기본 디렉토리를 벗어났습니다 '${baseDir}'`);
+  }
+  
+  // Comprehensive recursive path chain validation to prevent TOCTOU and symbolic link bypass
+  await validatePathChainSecurity(absolutePath, normalizedBase);
 }
 
 // Create project directory and return creation status

@@ -270,6 +270,42 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
     );
   });
 
+  it('should apply enhanced atomic security validation', async () => {
+    process.env.PROJECT_BASE_DIR = '/safe/projects';
+    
+    const fs = await import('fs');
+    fs.promises.access.mockRejectedValue({ code: 'ENOENT' });
+    fs.promises.mkdir.mockResolvedValue(undefined); // Allow directory creation
+    fs.promises.realpath.mockRejectedValue({ code: 'ENOENT' }); // New directory - expected behavior
+    
+    const result = await addProjectManually('secure-project');
+    
+    // Should succeed with enhanced security validation
+    expect(result.path).toBe('/safe/projects/secure-project');
+    expect(result.isManuallyAdded).toBe(true);
+    expect(result.directoryCreated).toBe(true);
+  });
+
+  it('should handle deep symbolic link chains securely', async () => {
+    process.env.PROJECT_BASE_DIR = '/safe/projects';
+    
+    const fs = await import('fs');
+    fs.promises.access.mockRejectedValue({ code: 'ENOENT' });
+    fs.promises.mkdir.mockResolvedValue(undefined); // Allow directory creation
+    
+    // Mock deep chain where intermediate link escapes base directory
+    fs.promises.realpath.mockImplementation((pathStr) => {
+      if (pathStr === '/safe/projects/test-project') {
+        return Promise.resolve('/unsafe/location'); // Escape to unsafe location
+      }
+      return Promise.resolve(pathStr);
+    });
+    
+    await expect(addProjectManually('test-project')).rejects.toThrow(
+      '보안 위반: 심볼릭 링크를 통한 디렉토리 순회 시도가 감지되었습니다'
+    );
+  });
+
   it('should handle realpath ENOENT errors gracefully for new directories', async () => {
     process.env.PROJECT_BASE_DIR = '/safe/projects';
     
