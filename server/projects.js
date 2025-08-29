@@ -88,27 +88,33 @@ const ALLOWED_BASE_PATHS = getAllowedBasePaths();
 // Cache for extracted project directories
 const projectDirectoryCache = new Map();
 
-// Validate and cache BASE_DIR at module level for performance
-const VALIDATED_BASE_DIR = (() => {
-  function validateBaseDir(baseDir) {
-    // 절대 경로 검증
-    if (!path.isAbsolute(baseDir)) {
-      throw new Error('PROJECT_BASE_DIR must be an absolute path');
-    }
-    
-    // 위험한 시스템 디렉토리 차단
-    const dangerousPaths = ['/etc', '/usr', '/var', '/sys', '/proc', '/boot', '/bin', '/sbin'];
-    const normalizedBaseDir = path.normalize(baseDir);
-    if (dangerousPaths.some(dangerous => normalizedBaseDir.startsWith(dangerous))) {
-      throw new Error(`PROJECT_BASE_DIR cannot be set to system directories. Attempted: ${baseDir}`);
-    }
-    
-    return normalizedBaseDir;
+// Platform-specific dangerous paths detection
+function getDangerousPaths() {
+  const common = ['/etc', '/usr', '/var', '/sys', '/proc'];
+  return process.platform === 'win32' 
+    ? [...common, 'C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)']
+    : [...common, '/boot', '/bin', '/sbin'];
+}
+
+// Centralized BASE_DIR validation function for reusability
+function validateBaseDir(baseDir) {
+  // 절대 경로 검증
+  if (!path.isAbsolute(baseDir)) {
+    throw new Error('PROJECT_BASE_DIR는 절대 경로여야 합니다');
   }
   
-  const baseDir = process.env.PROJECT_BASE_DIR || '/workspace';
-  return validateBaseDir(baseDir);
-})();
+  // 플랫폼별 위험한 시스템 디렉토리 차단
+  const dangerousPaths = getDangerousPaths();
+  const normalizedBaseDir = path.normalize(baseDir);
+  if (dangerousPaths.some(dangerous => normalizedBaseDir.startsWith(dangerous))) {
+    throw new Error(`PROJECT_BASE_DIR는 시스템 디렉토리로 설정할 수 없습니다. 시도된 경로: ${baseDir}`);
+  }
+  
+  return normalizedBaseDir;
+}
+
+// Pre-validated and normalized BASE_DIR for performance
+const VALIDATED_BASE_DIR = validateBaseDir(process.env.PROJECT_BASE_DIR || '/workspace');
 
 // Clear cache when needed (called when project files change)
 function clearProjectDirectoryCache() {
@@ -753,7 +759,7 @@ async function addProjectManually(projectPath, displayName = null) {
   
   // Validate project name first (empty, dots)
   if (!inputName || inputName === '.' || inputName === '..') {
-    throw new Error('Invalid project name. Please provide a valid directory name.');
+    throw new Error('유효하지 않은 프로젝트 이름입니다. 올바른 디렉토리 이름을 제공해주세요.');
   }
   
   // Strong directory traversal validation
@@ -762,42 +768,27 @@ async function addProjectManually(projectPath, displayName = null) {
       normalizedPath !== trimmedPath ||
       trimmedPath.includes('../') || 
       trimmedPath.includes('..\\')) {
-    throw new Error('Invalid project path. Directory traversal attempts are not allowed.');
+    throw new Error('유효하지 않은 프로젝트 경로입니다. 디렉토리 순회 시도는 허용되지 않습니다.');
   }
   if (process.env.NODE_ENV === 'development') {
     console.debug('📝 Extracted input name:', inputName);
   }
   
-  // Dynamic BASE_DIR validation for test flexibility
-  function validateBaseDir(baseDir) {
-    // 절대 경로 검증
-    if (!path.isAbsolute(baseDir)) {
-      throw new Error('PROJECT_BASE_DIR must be an absolute path');
-    }
-    
-    // 위험한 시스템 디렉토리 차단
-    const dangerousPaths = ['/etc', '/usr', '/var', '/sys', '/proc', '/boot', '/bin', '/sbin'];
-    const normalizedBaseDir = path.normalize(baseDir);
-    if (dangerousPaths.some(dangerous => normalizedBaseDir.startsWith(dangerous))) {
-      throw new Error(`PROJECT_BASE_DIR cannot be set to system directories. Attempted: ${baseDir}`);
-    }
-    
-    return normalizedBaseDir;
-  }
-  
+  // Use centralized validation function for consistency and test flexibility
   const baseDir = validateBaseDir(process.env.PROJECT_BASE_DIR || '/workspace');
   const absolutePath = path.resolve(baseDir, inputName);
   if (process.env.NODE_ENV === 'development') {
     console.debug('🎯 Project being created in configured base directory');
   }
   
-  // Security: Enhanced path validation with normalization for cross-platform compatibility
+  // Security: Enhanced path validation using pre-normalized base directory
   const normalizedAbsolute = path.normalize(absolutePath);
-  const normalizedBase = path.normalize(path.resolve(baseDir));
+  // baseDir is already validated and normalized, no need to re-normalize
+  const normalizedBase = baseDir;
   
   // Cross-platform path validation using normalized paths
   if (!normalizedAbsolute.startsWith(normalizedBase + path.sep)) {
-    throw new Error(`Security violation: Project path is outside allowed base directory '${baseDir}'`);
+    throw new Error(`보안 위반: 프로젝트 경로가 허용된 기본 디렉토리를 벗어났습니다 '${baseDir}'`);
   }
   
   // Security: Resolve symbolic links to prevent traversal attacks
@@ -807,14 +798,14 @@ async function addProjectManually(projectPath, displayName = null) {
       const realParentPath = await fs.realpath(parentDir);
       const realNormalizedPath = path.normalize(realParentPath);
       if (!realNormalizedPath.startsWith(normalizedBase + path.sep)) {
-        throw new Error('Security violation: Symbolic link traversal attempt detected');
+        throw new Error('보안 위반: 심볼릭 링크를 통한 디렉토리 순회 시도가 감지되었습니다');
       }
     }
   } catch (error) {
     // If realpath fails (directory doesn't exist), that's expected for new projects
     // We'll create the directory later, so this is not an error
     if (error.code !== 'ENOENT') {
-      throw new Error(`Security validation failed: ${error.message}`);
+      throw new Error(`보안 검증 실패: ${error.message}`);
     }
   }
   

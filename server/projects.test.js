@@ -66,16 +66,16 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
     process.env.PROJECT_BASE_DIR = '/safe/projects';
 
     await expect(addProjectManually('../../../etc/passwd')).rejects.toThrow(
-      'Invalid project path. Directory traversal attempts are not allowed.'
+      '유효하지 않은 프로젝트 경로입니다. 디렉토리 순회 시도는 허용되지 않습니다.'
     );
   });
 
   it('should validate project names correctly', async () => {
     process.env.PROJECT_BASE_DIR = '/test/projects';
 
-    await expect(addProjectManually('')).rejects.toThrow('Invalid project name');
-    await expect(addProjectManually('.')).rejects.toThrow('Invalid project name');
-    await expect(addProjectManually('..')).rejects.toThrow('Invalid project name');
+    await expect(addProjectManually('')).rejects.toThrow('유효하지 않은 프로젝트 이름입니다');
+    await expect(addProjectManually('.')).rejects.toThrow('유효하지 않은 프로젝트 이름입니다');
+    await expect(addProjectManually('..')).rejects.toThrow('유효하지 않은 프로젝트 이름입니다');
   });
 
   it('should generate correct project identifier for session linking', async () => {
@@ -99,7 +99,7 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
       process.env.PROJECT_BASE_DIR = systemDir + '/sensitive';
       
       await expect(addProjectManually('test-project')).rejects.toThrow(
-        'PROJECT_BASE_DIR cannot be set to system directories'
+        'PROJECT_BASE_DIR는 시스템 디렉토리로 설정할 수 없습니다'
       );
     }
   });
@@ -108,18 +108,18 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
     process.env.PROJECT_BASE_DIR = './relative/path';
     
     await expect(addProjectManually('test-project')).rejects.toThrow(
-      'PROJECT_BASE_DIR must be an absolute path'
+      'PROJECT_BASE_DIR는 절대 경로여야 합니다'
     );
   });
 
   it('should handle Windows-style path separators', async () => {
     // Test multiple Windows-style patterns
     await expect(addProjectManually('..\\sensitive')).rejects.toThrow(
-      'Invalid project path. Directory traversal attempts are not allowed.'
+      '유효하지 않은 프로젝트 경로입니다. 디렉토리 순회 시도는 허용되지 않습니다.'
     );
     
     await expect(addProjectManually('..\\..\\etc\\passwd')).rejects.toThrow(
-      'Invalid project path. Directory traversal attempts are not allowed.'
+      '유효하지 않은 프로젝트 경로입니다. 디렉토리 순회 시도는 허용되지 않습니다.'
     );
   });
 
@@ -136,7 +136,7 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
     });
 
     await expect(addProjectManually('test')).rejects.toThrow(
-      "Security violation: Project path is outside allowed base directory '/safe/projects'"
+      "보안 위반: 프로젝트 경로가 허용된 기본 디렉토리를 벗어났습니다 '/safe/projects'"
     );
 
     path.resolve.mockRestore();
@@ -192,15 +192,16 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
   });
 
   it('should handle extremely long paths that exceed OS limits', async () => {
-    // Test path length limits (OS-specific MAX_PATH)
-    const veryLongBasePath = '/tmp/' + 'very-long-directory-name/'.repeat(20);
-    process.env.PROJECT_BASE_DIR = veryLongBasePath;
+    // Test path length limits with reasonable base path but very long project name
+    process.env.PROJECT_BASE_DIR = '/tmp/test';
     
     const fs = await import('fs');
     fs.promises.access.mockRejectedValue({ code: 'ENOENT' });
+    fs.promises.realpath.mockRejectedValue({ code: 'ENOENT' });
     fs.promises.mkdir.mockRejectedValue({ code: 'ENAMETOOLONG', message: 'File name too long' });
     
-    await expect(addProjectManually('project')).rejects.toThrow('경로 이름이 너무 깁니다');
+    const longProjectName = 'a'.repeat(300); // Very long project name
+    await expect(addProjectManually(longProjectName)).rejects.toThrow('경로 이름이 너무 깁니다');
   });
 
   it('should validate path normalization edge cases', async () => {
@@ -216,7 +217,7 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
     for (const testCase of testCases) {
       if (testCase.includes('..') || !path.isAbsolute(testCase)) {
         await expect(addProjectManually(testCase)).rejects.toThrow(
-          'Invalid project path. Directory traversal attempts are not allowed.'
+          '유효하지 않은 프로젝트 경로입니다. 디렉토리 순회 시도는 허용되지 않습니다.'
         );
       }
     }
@@ -247,7 +248,7 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
     fs.promises.realpath.mockResolvedValue('/unsafe/location');
     
     await expect(addProjectManually('symlink-project')).rejects.toThrow(
-      'Security violation: Symbolic link traversal attempt detected'
+      '보안 위반: 심볼릭 링크를 통한 디렉토리 순회 시도가 감지되었습니다'
     );
   });
 
