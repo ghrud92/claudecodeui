@@ -3,84 +3,12 @@ import * as crossSpawn from 'cross-spawn';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
-import sharp from 'sharp';
+import { randomUUID } from 'crypto';
+import { compressImageIfNeeded, validateImageMagicBytes, getMemoryUsage } from './utils/imageCompression.js';
 
 // Use cross-spawn on Windows for better command execution
 let activeClaudeProcesses = new Map(); // Track active processes by session ID
 
-// Smart image compression optimized for text readability
-async function compressImageIfNeeded(buffer, mimeType, maxSize = 10 * 1024 * 1024) {
-  const originalSize = buffer.length;
-  
-  // If already under 10MB, no compression needed
-  if (originalSize <= maxSize) {
-    return { buffer, compressed: false, originalSize, finalSize: originalSize };
-  }
-  
-  console.log(`🗜️ Compressing large image: ${(originalSize / 1024 / 1024).toFixed(1)}MB`);
-  
-  try {
-    let sharpImage = sharp(buffer);
-    const metadata = await sharpImage.metadata();
-    
-    // Detect if image might be a screenshot (high width/height ratio suggests text content)
-    const isLikelyScreenshot = metadata.width > 1200 && metadata.height > 600;
-    
-    // Smart compression strategy based on image type and content
-    if (mimeType === 'image/png') {
-      if (isLikelyScreenshot) {
-        // For screenshots: Use higher quality JPEG (90%) to preserve text
-        console.log(`📸 Screenshot detected, using high-quality compression`);
-        sharpImage = sharpImage.jpeg({ quality: 90, progressive: true });
-      } else {
-        // For graphics: Standard quality is fine
-        sharpImage = sharpImage.jpeg({ quality: 85, progressive: true });
-      }
-    } else if (mimeType === 'image/jpeg') {
-      // JPEG: reduce quality progressively but stop higher for screenshots
-      const minQuality = isLikelyScreenshot ? 70 : 40; // Higher minimum for text
-      let quality = 85; // Start higher for better text
-      let compressed;
-      
-      do {
-        compressed = await sharp(buffer).jpeg({ quality, progressive: true }).toBuffer();
-        if (compressed.length <= maxSize || quality <= minQuality) break;
-        quality -= 5; // Smaller steps for finer control
-      } while (quality > minQuality);
-      
-      const finalSize = compressed.length;
-      console.log(`✅ JPEG compressed: ${(originalSize / 1024 / 1024).toFixed(1)}MB → ${(finalSize / 1024 / 1024).toFixed(1)}MB (${quality}% quality)`);
-      return { buffer: compressed, compressed: true, originalSize, finalSize };
-    }
-    
-    // Conservative resizing: Only if extremely large AND only modest reduction
-    if (metadata.width > 2560) { // Only resize beyond 2.5K
-      const scale = Math.max(0.75, Math.min(2560 / metadata.width, 1440 / metadata.height)); // Max 25% reduction
-      if (scale < 1) {
-        sharpImage = sharpImage.resize(
-          Math.round(metadata.width * scale), 
-          Math.round(metadata.height * scale),
-          { 
-            kernel: sharp.kernel.lanczos3, // Better quality for text
-            withoutEnlargement: true 
-          }
-        );
-        console.log(`📐 Conservative resize: ${metadata.width}x${metadata.height} → ${Math.round(metadata.width * scale)}x${Math.round(metadata.height * scale)} (${Math.round(scale * 100)}%)`);
-      }
-    }
-    
-    const compressed = await sharpImage.toBuffer();
-    const finalSize = compressed.length;
-    
-    const compressionRatio = ((originalSize - finalSize) / originalSize * 100).toFixed(1);
-    console.log(`✅ Image compressed: ${(originalSize / 1024 / 1024).toFixed(1)}MB → ${(finalSize / 1024 / 1024).toFixed(1)}MB (${compressionRatio}% reduction)`);
-    return { buffer: compressed, compressed: true, originalSize, finalSize };
-    
-  } catch (error) {
-    console.error('❌ Compression failed, using original:', error.message);
-    return { buffer, compressed: false, originalSize, finalSize: originalSize };
-  }
-}
 
 // Helper function to build Claude CLI arguments
 function buildClaudeArgs(options, settings) {
@@ -224,9 +152,10 @@ async function spawnClaude(command, options = {}, ws) {
     let tempDir = null;
     if (options.images && options.images.length > 0) {
       try {
-        // Use process ID and timestamp for unique temp directory
+        // Use UUID for guaranteed unique temp directory (race condition safe)
         const sessionHash = sessionId ? sessionId.slice(-8) : 'anon';
-        tempDir = path.join(workingDir, '.tmp', 'images', `${sessionHash}_${Date.now()}_${process.pid}`);
+        const uniqueId = randomUUID();
+        tempDir = path.join(workingDir, '.tmp', 'images', `${sessionHash}_${uniqueId}`);
         await fs.mkdir(tempDir, { recursive: true, mode: 0o700 });
         
         for (const [index, image] of options.images.entries()) {
@@ -237,11 +166,19 @@ async function spawnClaude(command, options = {}, ws) {
           }
           const [, mimeType, base64Data] = matches;
           
-          // Initial buffer creation and MIME type validation
+          // Initial buffer creation and comprehensive validation
           const originalBuffer = Buffer.from(base64Data, 'base64');
           const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+          
+          // Basic MIME type check
           if (!allowedTypes.includes(mimeType)) {
             console.error(`❌ Unsupported image type: ${mimeType}`);
+            continue;
+          }
+          
+          // Enhanced magic byte validation (MIME type vs actual content)
+          if (!validateImageMagicBytes(originalBuffer, mimeType)) {
+            console.error(`❌ Image ${index} magic bytes don't match MIME type ${mimeType}`);
             continue;
           }
           
@@ -252,8 +189,30 @@ async function spawnClaude(command, options = {}, ws) {
             continue;
           }
           
-          // Smart compression for large files (target: 10MB)
-          const { buffer: finalBuffer, compressed, originalSize, finalSize } = await compressImageIfNeeded(originalBuffer, mimeType);
+          // Monitor memory usage for large image processing
+          const memoryBefore = getMemoryUsage();
+          
+          // Smart compression with fallback to original on failure
+          let finalBuffer, compressed, originalSize, finalSize;
+          try {
+            const compressionResult = await compressImageIfNeeded(originalBuffer, mimeType);
+            finalBuffer = compressionResult.buffer;
+            compressed = compressionResult.compressed;
+            originalSize = compressionResult.originalSize;
+            finalSize = compressionResult.finalSize;
+            
+            // Log memory impact for large files
+            if (originalSize > 5 * 1024 * 1024) { // 5MB+
+              const memoryAfter = getMemoryUsage();
+              const memoryDiff = memoryAfter.heapUsed - memoryBefore.heapUsed;
+              console.log(`🧠 Memory impact: ${memoryDiff > 0 ? '+' : ''}${memoryDiff}MB (Heap: ${memoryAfter.heapUsed}MB)`);
+            }
+          } catch (compressionError) {
+            console.error(`❌ Compression failed for image ${index}, using original:`, compressionError.message);
+            finalBuffer = originalBuffer;
+            compressed = false;
+            originalSize = finalSize = originalBuffer.length;
+          }
           
           // Determine final extension (might change due to PNG→JPEG conversion)
           let finalExtension = mimeType.split('/')[1] || 'png';
@@ -263,13 +222,21 @@ async function spawnClaude(command, options = {}, ws) {
           
           const filename = `image_${index}.${finalExtension}`;
           const filepath = path.join(tempDir, filename);
-          await fs.writeFile(filepath, finalBuffer);
-          tempImagePaths.push(filepath);
           
-          if (compressed) {
-            console.log(`📁 Saved compressed image: ${filename} (${(originalSize / 1024).toFixed(1)}KB → ${(finalSize / 1024).toFixed(1)}KB)`);
-          } else {
-            console.log(`📁 Saved image: ${filename} (${(finalSize / 1024).toFixed(1)}KB)`);
+          // Safe file write with backup preservation
+          try {
+            await fs.writeFile(filepath, finalBuffer);
+            tempImagePaths.push(filepath);
+            
+            if (compressed) {
+              console.log(`📁 Saved compressed image: ${filename} (${(originalSize / 1024).toFixed(1)}KB → ${(finalSize / 1024).toFixed(1)}KB)`);
+            } else {
+              console.log(`📁 Saved image: ${filename} (${(finalSize / 1024).toFixed(1)}KB)`);
+            }
+          } catch (writeError) {
+            console.error(`❌ Failed to write image ${index} to ${filepath}:`, writeError.message);
+            // Continue with next image instead of failing entire upload
+            continue;
           }
         }
         
@@ -429,6 +396,5 @@ export {
   abortClaudeSession,
   buildClaudeArgs,
   processStdoutData,
-  setupProcessCleanup,
-  compressImageIfNeeded
+  setupProcessCleanup
 };
