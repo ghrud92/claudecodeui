@@ -768,7 +768,7 @@ async function addProjectManually(projectPath, displayName = null) {
     console.debug('📝 Extracted input name:', inputName);
   }
   
-  // Get validated BASE_DIR (dynamic for testing flexibility)
+  // Dynamic BASE_DIR validation for test flexibility
   function validateBaseDir(baseDir) {
     // 절대 경로 검증
     if (!path.isAbsolute(baseDir)) {
@@ -788,13 +788,34 @@ async function addProjectManually(projectPath, displayName = null) {
   const baseDir = validateBaseDir(process.env.PROJECT_BASE_DIR || '/workspace');
   const absolutePath = path.resolve(baseDir, inputName);
   if (process.env.NODE_ENV === 'development') {
-    console.debug('🎯 Resolved absolute path to:', absolutePath);
+    console.debug('🎯 Project being created in configured base directory');
   }
   
-  // Security: Basic validation to ensure the path is within the configured base directory
-  // Additional security check to prevent directory traversal attacks
-  if (!absolutePath.startsWith(path.resolve(baseDir) + path.sep)) {
-    throw new Error(`Security violation: Project path '${absolutePath}' is outside allowed base directory '${baseDir}'`);
+  // Security: Enhanced path validation with normalization for cross-platform compatibility
+  const normalizedAbsolute = path.normalize(absolutePath);
+  const normalizedBase = path.normalize(path.resolve(baseDir));
+  
+  // Cross-platform path validation using normalized paths
+  if (!normalizedAbsolute.startsWith(normalizedBase + path.sep)) {
+    throw new Error(`Security violation: Project path is outside allowed base directory '${baseDir}'`);
+  }
+  
+  // Security: Resolve symbolic links to prevent traversal attacks
+  try {
+    const parentDir = path.dirname(absolutePath);
+    if (parentDir && parentDir !== '.' && parentDir !== '/') {
+      const realParentPath = await fs.realpath(parentDir);
+      const realNormalizedPath = path.normalize(realParentPath);
+      if (!realNormalizedPath.startsWith(normalizedBase + path.sep)) {
+        throw new Error('Security violation: Symbolic link traversal attempt detected');
+      }
+    }
+  } catch (error) {
+    // If realpath fails (directory doesn't exist), that's expected for new projects
+    // We'll create the directory later, so this is not an error
+    if (error.code !== 'ENOENT') {
+      throw new Error(`Security validation failed: ${error.message}`);
+    }
   }
   
   // Ensure directory exists (create if needed)

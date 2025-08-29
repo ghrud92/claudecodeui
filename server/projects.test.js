@@ -9,6 +9,7 @@ vi.mock('fs', () => ({
     mkdir: vi.fn().mockResolvedValue(undefined),
     readFile: vi.fn().mockResolvedValue('{}'),
     writeFile: vi.fn().mockResolvedValue(undefined),
+    realpath: vi.fn().mockRejectedValue({ code: 'ENOENT' }),
   },
 }));
 
@@ -20,9 +21,13 @@ vi.mock('./utils/paths.js', () => ({
 describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
   let originalEnv;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     originalEnv = process.env.PROJECT_BASE_DIR;
     vi.clearAllMocks();
+    
+    // Set default mocks for fs.promises.realpath
+    const fs = await import('fs');
+    fs.promises.realpath.mockRejectedValue({ code: 'ENOENT' });
   });
 
   afterEach(() => {
@@ -131,7 +136,7 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
     });
 
     await expect(addProjectManually('test')).rejects.toThrow(
-      "Security violation: Project path '/unsafe/location/test' is outside allowed base directory '/safe/projects'"
+      "Security violation: Project path is outside allowed base directory '/safe/projects'"
     );
 
     path.resolve.mockRestore();
@@ -215,5 +220,72 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
         );
       }
     }
+  });
+
+  it('should handle cross-platform path validation correctly', async () => {
+    process.env.PROJECT_BASE_DIR = '/safe/projects';
+    
+    const fs = await import('fs');
+    fs.promises.access.mockRejectedValue({ code: 'ENOENT' });
+    fs.promises.realpath.mockRejectedValue({ code: 'ENOENT' }); // Parent directory doesn't exist yet
+    fs.promises.mkdir.mockResolvedValue(undefined); // Successfully create directory
+    
+    const result = await addProjectManually('test-project');
+    
+    // Should work with normalized path handling
+    expect(result.path).toBeDefined();
+    expect(result.fullPath).toContain('/safe/projects/test-project');
+  });
+
+  it('should detect symbolic link traversal attempts', async () => {
+    process.env.PROJECT_BASE_DIR = '/safe/projects';
+    
+    const fs = await import('fs');
+    fs.promises.access.mockRejectedValue({ code: 'ENOENT' });
+    
+    // Mock fs.realpath to simulate symbolic link resolving to outside directory
+    fs.promises.realpath.mockResolvedValue('/unsafe/location');
+    
+    await expect(addProjectManually('symlink-project')).rejects.toThrow(
+      'Security violation: Symbolic link traversal attempt detected'
+    );
+  });
+
+  it('should handle realpath ENOENT errors gracefully for new directories', async () => {
+    process.env.PROJECT_BASE_DIR = '/safe/projects';
+    
+    const fs = await import('fs');
+    fs.promises.access.mockRejectedValue({ code: 'ENOENT' });
+    fs.promises.realpath.mockRejectedValue({ code: 'ENOENT' }); // Expected for new directories
+    fs.promises.mkdir.mockResolvedValue(undefined); // Successfully create directory
+    
+    const result = await addProjectManually('new-project');
+    
+    // Should succeed since ENOENT is expected for new directories
+    expect(result.path).toBeDefined();
+  });
+
+  it('should not log sensitive paths in production', async () => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    process.env.PROJECT_BASE_DIR = '/secure/path';
+    
+    const consoleSpy = vi.spyOn(console, 'debug');
+    
+    const fs = await import('fs');
+    fs.promises.access.mockRejectedValue({ code: 'ENOENT' });
+    fs.promises.realpath.mockRejectedValue({ code: 'ENOENT' });
+    fs.promises.mkdir.mockResolvedValue(undefined); // Successfully create directory
+    
+    await addProjectManually('test-project');
+    
+    // Should not call console.debug with sensitive information
+    const debugCalls = consoleSpy.mock.calls.filter(call => 
+      call[0] && call[0].includes && call[0].includes('/secure/path')
+    );
+    expect(debugCalls).toHaveLength(0);
+    
+    consoleSpy.mockRestore();
+    process.env.NODE_ENV = originalEnv;
   });
 });
