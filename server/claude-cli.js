@@ -211,21 +211,6 @@ async function spawnClaude(command, options = {}, ws) {
       args.push('--permission-mode', permissionMode);
     }
     
-    if (settings.skipPermissions && permissionMode !== 'plan') {
-      args.push('--dangerously-skip-permissions');
-    } else {
-      let allowedTools = [...(settings.allowedTools || [])];
-      if (permissionMode === 'plan') {
-        const planModeTools = ['Read', 'Task', 'exit_plan_mode', 'TodoRead', 'TodoWrite'];
-        for (const tool of planModeTools) {
-          if (!allowedTools.includes(tool)) {
-            allowedTools.push(tool);
-          }
-        }
-      }
-      allowedTools.forEach(tool => args.push('--allowedTools', tool));
-      (settings.disallowedTools || []).forEach(tool => args.push('--disallowedTools', tool));
-    }
     
     console.log('Spawning Claude CLI:', 'claude', args.join(' '));
     
@@ -246,63 +231,36 @@ async function spawnClaude(command, options = {}, ws) {
     activeClaudeProcesses.set(processKey, { process: claudeProcess, capturedSessionId: null });
     
     const cleanup = async () => {
-      activeClaudeProcesses.delete(processKey);
-      if (tempImagePaths.length > 0) {
-        for (const imagePath of tempImagePaths) {
-          await fs.unlink(imagePath).catch(err => console.error(`Failed to delete temp image ${imagePath}:`, err));
+      try {
+        // Remove from active processes map
+        activeClaudeProcesses.delete(processKey);
+        
+        // Clean up temporary image files
+        if (tempImagePaths.length > 0) {
+          const cleanupPromises = tempImagePaths.map(imagePath =>
+            fs.unlink(imagePath).catch(err => 
+              console.error(`❌ Failed to delete temp image ${imagePath}:`, err)
+            )
+          );
+          await Promise.allSettled(cleanupPromises);
         }
-      }
-      if (tempDir) {
-        await fs.rm(tempDir, { recursive: true, force: true }).catch(err => console.error(`Failed to delete temp directory ${tempDir}:`, err));
+        
+        // Clean up temporary directory
+        if (tempDir) {
+          try {
+            await fs.rm(tempDir, { recursive: true, force: true });
+          } catch (err) {
+            console.error(`❌ Failed to delete temp directory ${tempDir}:`, err);
+          }
+        }
+      } catch (error) {
+        console.error('❌ Error during cleanup:', error);
       }
     };
 
+    // Use helper function for stdout data processing
     claudeProcess.stdout.on('data', (data) => {
-      const rawOutput = data.toString();
-      const lines = rawOutput.split('\n').filter(line => line.trim());
-      
-      for (const line of lines) {
-        // Quick check if line looks like JSON before parsing (performance optimization)
-        const trimmedLine = line.trim();
-        if (trimmedLine.startsWith('{') && trimmedLine.endsWith('}')) {
-          try {
-            const response = JSON.parse(trimmedLine);
-          
-          // Handle session ID capture with race condition protection
-          if (response.session_id && !capturedSessionId) {
-            capturedSessionId = response.session_id;
-            
-            // Atomically update the process entry
-            const entry = activeClaudeProcesses.get(processKey);
-            if (entry && !entry.capturedSessionId) {
-              entry.capturedSessionId = capturedSessionId;
-              
-              // Send session-created event if we get a new sessionId from Claude CLI
-              // This happens both for new sessions and when --resume returns a different sessionId
-              if (!sessionCreatedSent && capturedSessionId !== sessionId) {
-                sessionCreatedSent = true;
-                console.log(`📋 Session ID updated: ${sessionId} -> ${capturedSessionId}`);
-                
-                // Use setImmediate to ensure WebSocket message is sent after current processing
-                setImmediate(() => {
-                  if (ws && ws.readyState === 1) { // Check WebSocket is still open
-                    ws.send(JSON.stringify({ type: 'session-created', sessionId: capturedSessionId }));
-                  }
-                });
-              }
-            }
-          }
-          
-            ws.send(JSON.stringify({ type: 'claude-response', data: response }));
-          } catch (parseError) {
-            // If JSON parsing fails, send as plain text
-            ws.send(JSON.stringify({ type: 'claude-output', data: trimmedLine }));
-          }
-        } else {
-          // Line doesn't look like JSON, send as plain text
-          ws.send(JSON.stringify({ type: 'claude-output', data: trimmedLine }));
-        }
-      }
+      processStdoutData(data, ws, sessionId, processKey, sessionState);
     });
     
     claudeProcess.stderr.on('data', (data) => {
