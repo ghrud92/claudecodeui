@@ -149,7 +149,9 @@ async function spawnClaude(command, options = {}, ws) {
     let tempDir = null;
     if (options.images && options.images.length > 0) {
       try {
-        tempDir = path.join(workingDir, '.tmp', 'images', Date.now().toString());
+        // Use process ID and timestamp for unique temp directory
+        const sessionHash = sessionId ? sessionId.slice(-8) : 'anon';
+        tempDir = path.join(workingDir, '.tmp', 'images', `${sessionHash}_${Date.now()}_${process.pid}`);
         await fs.mkdir(tempDir, { recursive: true, mode: 0o700 });
         
         for (const [index, image] of options.images.entries()) {
@@ -159,11 +161,28 @@ async function spawnClaude(command, options = {}, ws) {
             continue;
           }
           const [, mimeType, base64Data] = matches;
+          
+          // File size validation (2MB limit)
+          const buffer = Buffer.from(base64Data, 'base64');
+          const maxSize = 2 * 1024 * 1024; // 2MB
+          if (buffer.length > maxSize) {
+            console.error(`❌ Image ${index} too large: ${(buffer.length / 1024 / 1024).toFixed(2)}MB > 2MB`);
+            continue;
+          }
+          
+          // MIME type validation
+          const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+          if (!allowedTypes.includes(mimeType)) {
+            console.error(`❌ Unsupported image type: ${mimeType}`);
+            continue;
+          }
+          
           const extension = mimeType.split('/')[1] || 'png';
           const filename = `image_${index}.${extension}`;
           const filepath = path.join(tempDir, filename);
-          await fs.writeFile(filepath, Buffer.from(base64Data, 'base64'));
+          await fs.writeFile(filepath, buffer);
           tempImagePaths.push(filepath);
+          console.log(`📁 Saved image: ${filename} (${(buffer.length / 1024).toFixed(1)}KB)`);
         }
         
         if (tempImagePaths.length > 0 && trimmedCommand) {
@@ -237,7 +256,13 @@ async function spawnClaude(command, options = {}, ws) {
               console.error(`❌ Failed to delete temp image ${imagePath}:`, err)
             )
           );
-          await Promise.allSettled(cleanupPromises);
+          const results = await Promise.allSettled(cleanupPromises);
+          const failed = results.filter(r => r.status === 'rejected');
+          if (failed.length > 0) {
+            console.warn(`⚠️ Failed to clean ${failed.length}/${results.length} temp files`);
+          } else if (tempImagePaths.length > 0) {
+            console.log(`✅ Successfully cleaned ${tempImagePaths.length} temp files`);
+          }
         }
         
         // Clean up temporary directory
