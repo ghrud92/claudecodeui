@@ -6,17 +6,19 @@
  * Get dangerous system paths that should be restricted for security
  * @returns {string[]} Array of dangerous system paths
  */
-function getDangerousSystemPaths() {
+export function getDangerousSystemPaths() {
   const commonPaths = ['/etc', '/usr', '/var', '/sys', '/proc'];
   
   if (process.platform === 'win32') {
+    // Use dynamic system drive detection instead of hardcoded 'C:'
+    const systemDrive = process.env.SystemDrive || 'C:';
     return [
       ...commonPaths,
-      'C:\\Windows',
-      'C:\\Program Files', 
-      'C:\\Program Files (x86)',
-      'C:\\ProgramData',
-      'C:\\System Volume Information'
+      `${systemDrive}\\Windows`,
+      `${systemDrive}\\Program Files`, 
+      `${systemDrive}\\Program Files (x86)`,
+      `${systemDrive}\\ProgramData`,
+      `${systemDrive}\\System Volume Information`
     ];
   }
   
@@ -27,7 +29,7 @@ function getDangerousSystemPaths() {
  * Get allowed base path patterns for project creation
  * @returns {string[]} Array of allowed base path patterns
  */
-function getAllowedBasePathPatterns() {
+export function getAllowedBasePathPatterns() {
   if (process.platform === 'win32') {
     return [
       /^[A-Za-z]:\\workspace/,
@@ -53,7 +55,7 @@ function getAllowedBasePathPatterns() {
  * @param {string} absolutePath - The absolute path to validate
  * @returns {boolean} True if path is safe, false otherwise
  */
-function isSafeProjectPath(absolutePath) {
+export function isSafeProjectPath(absolutePath) {
   const dangerousPaths = getDangerousSystemPaths();
   
   // Check if path starts with any dangerous system path
@@ -71,7 +73,7 @@ function isSafeProjectPath(absolutePath) {
  * @param {string} absolutePath - The absolute path to validate
  * @returns {boolean} True if path matches allowed patterns, false otherwise
  */
-function matchesAllowedPattern(absolutePath) {
+export function matchesAllowedPattern(absolutePath) {
   const allowedPatterns = getAllowedBasePathPatterns();
   
   return allowedPatterns.some(pattern => pattern.test(absolutePath));
@@ -82,7 +84,7 @@ function matchesAllowedPattern(absolutePath) {
  * @param {string} pathStr - The path string to validate
  * @returns {boolean} True if path format is valid for current platform
  */
-function isValidPathFormat(pathStr) {
+export function isValidPathFormat(pathStr) {
   if (process.platform === 'win32') {
     // Windows: Must have drive letter (C:\, D:\, etc.)
     return /^[A-Za-z]:\\/.test(pathStr);
@@ -96,7 +98,7 @@ function isValidPathFormat(pathStr) {
  * Get platform-specific path separator
  * @returns {string} Path separator for current platform
  */
-function getPathSeparator() {
+export function getPathSeparator() {
   return process.platform === 'win32' ? '\\' : '/';
 }
 
@@ -105,19 +107,10 @@ function getPathSeparator() {
  * @param {string} pathStr - The path string to normalize
  * @returns {string} Path with normalized separators
  */
-function normalizePlatformPath(pathStr) {
+export function normalizePlatformPath(pathStr) {
   const separator = getPathSeparator();
   const oppositeSeparator = separator === '\\' ? '/' : '\\';
   
   return pathStr.replace(new RegExp(`\\${oppositeSeparator}`, 'g'), separator);
 }
 
-module.exports = {
-  getDangerousSystemPaths,
-  getAllowedBasePathPatterns,
-  isSafeProjectPath,
-  matchesAllowedPattern,
-  isValidPathFormat,
-  getPathSeparator,
-  normalizePlatformPath
-};

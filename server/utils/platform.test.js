@@ -48,6 +48,27 @@ describe('Platform Utilities', () => {
       expect(paths).toContain('C:\\ProgramData');
       expect(paths).toContain('C:\\System Volume Information');
     });
+
+    it('should use SystemDrive environment variable on Windows', () => {
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      const originalSystemDrive = process.env.SystemDrive;
+      
+      // Test with custom system drive
+      process.env.SystemDrive = 'D:';
+      
+      const paths = getDangerousSystemPaths();
+      
+      expect(paths).toContain('D:\\Windows');
+      expect(paths).toContain('D:\\Program Files');
+      expect(paths).toContain('D:\\Program Files (x86)');
+      
+      // Restore original value
+      if (originalSystemDrive !== undefined) {
+        process.env.SystemDrive = originalSystemDrive;
+      } else {
+        delete process.env.SystemDrive;
+      }
+    });
   });
 
   describe('getAllowedBasePathPatterns', () => {
