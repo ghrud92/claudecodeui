@@ -18,6 +18,13 @@ vi.mock('./utils/paths.js', () => ({
   getClaudeDir: vi.fn(() => '/mock/.claude'),
 }));
 
+// Mock platform utilities
+vi.mock('./utils/platform.js', () => ({
+  getDangerousSystemPaths: vi.fn(() => ['/etc', '/usr', '/var', '/sys', '/proc', '/boot', '/bin', '/sbin']),
+  isValidPathFormat: vi.fn(() => true),
+  isSafeProjectPath: vi.fn(() => true)
+}));
+
 describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
   let originalEnv;
 
@@ -28,6 +35,11 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
     // Set default mocks for fs.promises.realpath
     const fs = await import('fs');
     fs.promises.realpath.mockRejectedValue({ code: 'ENOENT' });
+    
+    // Reset platform utility mocks to default safe values
+    const platformUtils = await import('./utils/platform.js');
+    platformUtils.isSafeProjectPath.mockReturnValue(true);
+    platformUtils.isValidPathFormat.mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -95,8 +107,14 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
   it('should throw error for system directories in PROJECT_BASE_DIR', async () => {
     const systemDirs = ['/etc', '/usr', '/var', '/sys', '/proc', '/boot', '/bin', '/sbin'];
     
+    // Import and mock platform utilities for this test
+    const platformUtils = await import('./utils/platform.js');
+    
     for (const systemDir of systemDirs) {
       process.env.PROJECT_BASE_DIR = systemDir + '/sensitive';
+      
+      // Mock isSafeProjectPath to return false for system directories
+      platformUtils.isSafeProjectPath.mockReturnValue(false);
       
       await expect(addProjectManually('test-project')).rejects.toThrow(
         'PROJECT_BASE_DIR는 시스템 디렉토리로 설정할 수 없습니다'

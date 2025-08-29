@@ -66,53 +66,45 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import os from 'os';
 import { getProjectsPath, getClaudeDir } from './utils/paths.js';
+import {
+  getDangerousSystemPaths,
+  isValidPathFormat,
+  isSafeProjectPath
+} from './utils/platform.js';
 
-// Get platform-appropriate allowed base paths for security validation.
-// This is calculated once at module load time for performance.
-function getAllowedBasePaths() {
-    const homedir = os.homedir();
-    const paths = [homedir];
-
-    if (process.platform === 'win32') {
-        // Windows-specific paths
-        paths.push('C:\\Users', 'D:\\Users', 'C:\\Projects', 'D:\\Projects');
-    } else {
-        // Unix-like paths
-        paths.push('/home', '/Users', '/opt', '/workspace');
-    }
-
-    return paths;
-}
-const ALLOWED_BASE_PATHS = getAllowedBasePaths();
 
 // Cache for extracted project directories
 const projectDirectoryCache = new Map();
 
-// Platform-specific dangerous paths detection
-function getDangerousPaths() {
-  const common = ['/etc', '/usr', '/var', '/sys', '/proc'];
-  return process.platform === 'win32' 
-    ? [...common, 'C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)']
-    : [...common, '/boot', '/bin', '/sbin'];
-}
 
-// Centralized BASE_DIR validation function for reusability
+// Enhanced BASE_DIR validation function with additional configuration validation
 function validateBaseDir(baseDir) {
-  // 크로스 플랫폼 절대 경로 검증 개선
+  // Enhanced path format validation using platform utilities
   if (!path.isAbsolute(baseDir)) {
     throw new Error('PROJECT_BASE_DIR는 절대 경로여야 합니다');
   }
   
-  // Windows 추가 검증: 드라이브 문자 필요
-  if (process.platform === 'win32' && !baseDir.match(/^[A-Za-z]:\\/)) {
+  // Platform-specific path format validation
+  if (!isValidPathFormat(baseDir)) {
     throw new Error('PROJECT_BASE_DIR는 절대 경로여야 합니다');
   }
   
-  // 플랫폼별 위험한 시스템 디렉토리 차단
-  const dangerousPaths = getDangerousPaths();
   const normalizedBaseDir = path.normalize(baseDir);
-  if (dangerousPaths.some(dangerous => normalizedBaseDir.startsWith(dangerous))) {
+  
+  // Enhanced security validation using platform utilities
+  if (!isSafeProjectPath(normalizedBaseDir)) {
     throw new Error(`PROJECT_BASE_DIR는 시스템 디렉토리로 설정할 수 없습니다. 시도된 경로: ${baseDir}`);
+  }
+  
+  // Additional validation: prevent commonly dangerous configurations
+  const homedir = os.homedir();
+  if (normalizedBaseDir === homedir) {
+    throw new Error('PROJECT_BASE_DIR를 홈 디렉토리로 직접 설정할 수 없습니다. 하위 디렉토리를 사용해주세요.');
+  }
+  
+  // Additional validation: prevent root directory
+  if (normalizedBaseDir === '/' || normalizedBaseDir.match(/^[A-Za-z]:\\?$/)) {
+    throw new Error('PROJECT_BASE_DIR를 루트 디렉토리로 설정할 수 없습니다.');
   }
   
   return normalizedBaseDir;
