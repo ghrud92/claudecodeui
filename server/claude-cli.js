@@ -148,12 +148,12 @@ async function spawnClaude(command, options = {}, ws) {
     
     const tempImagePaths = [];
     let tempDir = null;
-    if (images && images.length > 0) {
+    if (options.images && options.images.length > 0) {
       try {
         tempDir = path.join(workingDir, '.tmp', 'images', Date.now().toString());
         await fs.mkdir(tempDir, { recursive: true, mode: 0o700 });
         
-        for (const [index, image] of images.entries()) {
+        for (const [index, image] of options.images.entries()) {
           const matches = image.data.match(/^data:([^;]+);base64,(.+)$/);
           if (!matches) {
             console.error('Invalid image data format');
