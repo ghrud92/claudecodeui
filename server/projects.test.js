@@ -136,4 +136,84 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
 
     path.resolve.mockRestore();
   });
+
+  it('should handle very long project names', async () => {
+    // Test maximum path length handling
+    const longName = 'a'.repeat(200); // Very long but reasonable project name
+    process.env.PROJECT_BASE_DIR = '/tmp/test';
+    
+    const fs = await import('fs');
+    fs.promises.access.mockRejectedValue({ code: 'ENOENT' });
+
+    await expect(addProjectManually(longName)).resolves.toBeDefined();
+  });
+
+  it('should handle special characters in project names', async () => {
+    process.env.PROJECT_BASE_DIR = '/tmp/test';
+    
+    const fs = await import('fs');
+    fs.promises.access.mockRejectedValue({ code: 'ENOENT' });
+
+    // Test Unicode characters
+    await expect(addProjectManually('프로젝트-한글')).resolves.toBeDefined();
+    
+    // Test spaces (should work after basename extraction)
+    await expect(addProjectManually('project with spaces')).resolves.toBeDefined();
+    
+    // Test special characters
+    await expect(addProjectManually('project_with-dots.and_underscores')).resolves.toBeDefined();
+  });
+
+  it('should handle disk space and permission errors gracefully', async () => {
+    process.env.PROJECT_BASE_DIR = '/tmp/test';
+    
+    const fs = await import('fs');
+    
+    // Test disk space error
+    fs.promises.access.mockRejectedValue({ code: 'ENOENT' });
+    fs.promises.mkdir.mockRejectedValue({ code: 'ENOSPC', message: 'No space left on device' });
+    
+    await expect(addProjectManually('test-disk-full')).rejects.toThrow('디스크 공간이 부족합니다');
+    
+    // Test read-only filesystem error
+    fs.promises.mkdir.mockRejectedValue({ code: 'EROFS', message: 'Read-only file system' });
+    
+    await expect(addProjectManually('test-readonly')).rejects.toThrow('읽기 전용 파일시스템입니다');
+    
+    // Test resource exhaustion
+    fs.promises.mkdir.mockRejectedValue({ code: 'EMFILE', message: 'Too many open files' });
+    
+    await expect(addProjectManually('test-resources')).rejects.toThrow('시스템 리소스가 부족합니다');
+  });
+
+  it('should handle extremely long paths that exceed OS limits', async () => {
+    // Test path length limits (OS-specific MAX_PATH)
+    const veryLongBasePath = '/tmp/' + 'very-long-directory-name/'.repeat(20);
+    process.env.PROJECT_BASE_DIR = veryLongBasePath;
+    
+    const fs = await import('fs');
+    fs.promises.access.mockRejectedValue({ code: 'ENOENT' });
+    fs.promises.mkdir.mockRejectedValue({ code: 'ENAMETOOLONG', message: 'File name too long' });
+    
+    await expect(addProjectManually('project')).rejects.toThrow('경로 이름이 너무 깁니다');
+  });
+
+  it('should validate path normalization edge cases', async () => {
+    // Test various normalization scenarios
+    const testCases = [
+      './current/path', // relative path
+      '../../parent/path', // multiple parent references
+      'path/./current', // current directory references
+      'path//double//slashes', // double slashes
+      'path/../../escape', // mixed traversal attempts
+    ];
+    
+    for (const testCase of testCases) {
+      if (testCase.includes('..') || !path.isAbsolute(testCase)) {
+        await expect(addProjectManually(testCase)).rejects.toThrow(
+          'Invalid project path. Directory traversal attempts are not allowed.'
+        );
+      }
+    }
+  });
 });

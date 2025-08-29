@@ -88,6 +88,28 @@ const ALLOWED_BASE_PATHS = getAllowedBasePaths();
 // Cache for extracted project directories
 const projectDirectoryCache = new Map();
 
+// Validate and cache BASE_DIR at module level for performance
+const VALIDATED_BASE_DIR = (() => {
+  function validateBaseDir(baseDir) {
+    // 절대 경로 검증
+    if (!path.isAbsolute(baseDir)) {
+      throw new Error('PROJECT_BASE_DIR must be an absolute path');
+    }
+    
+    // 위험한 시스템 디렉토리 차단
+    const dangerousPaths = ['/etc', '/usr', '/var', '/sys', '/proc', '/boot', '/bin', '/sbin'];
+    const normalizedBaseDir = path.normalize(baseDir);
+    if (dangerousPaths.some(dangerous => normalizedBaseDir.startsWith(dangerous))) {
+      throw new Error(`PROJECT_BASE_DIR cannot be set to system directories. Attempted: ${baseDir}`);
+    }
+    
+    return normalizedBaseDir;
+  }
+  
+  const baseDir = process.env.PROJECT_BASE_DIR || '/workspace';
+  return validateBaseDir(baseDir);
+})();
+
 // Clear cache when needed (called when project files change)
 function clearProjectDirectoryCache() {
   projectDirectoryCache.clear();
@@ -701,8 +723,16 @@ async function ensureDirectoryExists(absolutePath) {
           throw new Error(`Permission denied creating directory: ${absolutePath}`);
         } else if (createError.code === 'ENOTDIR') {
           throw new Error(`Cannot create directory - parent path is not a directory: ${absolutePath}`);
+        } else if (createError.code === 'ENOSPC') {
+          throw new Error(`디스크 공간이 부족합니다: ${absolutePath}`);
+        } else if (createError.code === 'EROFS') {
+          throw new Error(`읽기 전용 파일시스템입니다: ${absolutePath}`);
+        } else if (createError.code === 'EMFILE' || createError.code === 'ENFILE') {
+          throw new Error(`시스템 리소스가 부족합니다: ${absolutePath}`);
+        } else if (createError.code === 'ENAMETOOLONG') {
+          throw new Error(`경로 이름이 너무 깁니다: ${absolutePath}`);
         } else {
-          throw new Error(`Failed to create directory: ${absolutePath} - ${createError.message}`);
+          throw new Error(`디렉토리 생성 실패: ${absolutePath} - ${createError.message}`);
         }
       }
     } else {
@@ -717,22 +747,28 @@ async function addProjectManually(projectPath, displayName = null) {
     console.debug('🚀 addProjectManually called with:', projectPath);
   }
   
-  // Extract project name - validate for directory traversal attempts
+  // Extract project name and validate basic requirements first
   const trimmedPath = projectPath.trim();
-  if (trimmedPath.includes('../') || trimmedPath.includes('..\\')) {
-    throw new Error('Invalid project path. Directory traversal attempts are not allowed.');
-  }
   const inputName = path.basename(trimmedPath);
-  if (process.env.NODE_ENV === 'development') {
-    console.debug('📝 Extracted input name:', inputName);
-  }
   
-  // Validate project name
+  // Validate project name first (empty, dots)
   if (!inputName || inputName === '.' || inputName === '..') {
     throw new Error('Invalid project name. Please provide a valid directory name.');
   }
   
-  // Validate and get PROJECT_BASE_DIR environment variable or default to /workspace/
+  // Strong directory traversal validation
+  const normalizedPath = path.normalize(trimmedPath);
+  if (normalizedPath.includes('..') || 
+      normalizedPath !== trimmedPath ||
+      trimmedPath.includes('../') || 
+      trimmedPath.includes('..\\')) {
+    throw new Error('Invalid project path. Directory traversal attempts are not allowed.');
+  }
+  if (process.env.NODE_ENV === 'development') {
+    console.debug('📝 Extracted input name:', inputName);
+  }
+  
+  // Get validated BASE_DIR (dynamic for testing flexibility)
   function validateBaseDir(baseDir) {
     // 절대 경로 검증
     if (!path.isAbsolute(baseDir)) {
