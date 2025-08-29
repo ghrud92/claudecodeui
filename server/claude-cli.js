@@ -8,7 +8,7 @@ import sharp from 'sharp';
 // Use cross-spawn on Windows for better command execution
 let activeClaudeProcesses = new Map(); // Track active processes by session ID
 
-// Smart image compression for large files
+// Smart image compression optimized for text readability
 async function compressImageIfNeeded(buffer, mimeType, maxSize = 10 * 1024 * 1024) {
   const originalSize = buffer.length;
   
@@ -23,37 +23,57 @@ async function compressImageIfNeeded(buffer, mimeType, maxSize = 10 * 1024 * 102
     let sharpImage = sharp(buffer);
     const metadata = await sharpImage.metadata();
     
-    // Smart compression strategy based on image type and size
+    // Detect if image might be a screenshot (high width/height ratio suggests text content)
+    const isLikelyScreenshot = metadata.width > 1200 && metadata.height > 600;
+    
+    // Smart compression strategy based on image type and content
     if (mimeType === 'image/png') {
-      // PNG screenshots: convert to JPEG with high quality for better compression
-      sharpImage = sharpImage.jpeg({ quality: 85, progressive: true });
+      if (isLikelyScreenshot) {
+        // For screenshots: Use higher quality JPEG (90%) to preserve text
+        console.log(`📸 Screenshot detected, using high-quality compression`);
+        sharpImage = sharpImage.jpeg({ quality: 90, progressive: true });
+      } else {
+        // For graphics: Standard quality is fine
+        sharpImage = sharpImage.jpeg({ quality: 85, progressive: true });
+      }
     } else if (mimeType === 'image/jpeg') {
-      // JPEG: reduce quality progressively until under limit
-      let quality = 80;
+      // JPEG: reduce quality progressively but stop higher for screenshots
+      const minQuality = isLikelyScreenshot ? 70 : 40; // Higher minimum for text
+      let quality = 85; // Start higher for better text
       let compressed;
       
       do {
         compressed = await sharp(buffer).jpeg({ quality, progressive: true }).toBuffer();
-        if (compressed.length <= maxSize || quality <= 40) break;
-        quality -= 10;
-      } while (quality > 40);
+        if (compressed.length <= maxSize || quality <= minQuality) break;
+        quality -= 5; // Smaller steps for finer control
+      } while (quality > minQuality);
       
       const finalSize = compressed.length;
       console.log(`✅ JPEG compressed: ${(originalSize / 1024 / 1024).toFixed(1)}MB → ${(finalSize / 1024 / 1024).toFixed(1)}MB (${quality}% quality)`);
       return { buffer: compressed, compressed: true, originalSize, finalSize };
     }
     
-    // For PNG screenshots, also try resizing if still too large
-    if (metadata.width > 1920) {
-      const scale = Math.min(1920 / metadata.width, 1080 / metadata.height);
-      sharpImage = sharpImage.resize(Math.round(metadata.width * scale), Math.round(metadata.height * scale));
-      console.log(`📐 Resizing image: ${metadata.width}x${metadata.height} → ${Math.round(metadata.width * scale)}x${Math.round(metadata.height * scale)}`);
+    // Conservative resizing: Only if extremely large AND only modest reduction
+    if (metadata.width > 2560) { // Only resize beyond 2.5K
+      const scale = Math.max(0.75, Math.min(2560 / metadata.width, 1440 / metadata.height)); // Max 25% reduction
+      if (scale < 1) {
+        sharpImage = sharpImage.resize(
+          Math.round(metadata.width * scale), 
+          Math.round(metadata.height * scale),
+          { 
+            kernel: sharp.kernel.lanczos3, // Better quality for text
+            withoutEnlargement: true 
+          }
+        );
+        console.log(`📐 Conservative resize: ${metadata.width}x${metadata.height} → ${Math.round(metadata.width * scale)}x${Math.round(metadata.height * scale)} (${Math.round(scale * 100)}%)`);
+      }
     }
     
     const compressed = await sharpImage.toBuffer();
     const finalSize = compressed.length;
     
-    console.log(`✅ Image compressed: ${(originalSize / 1024 / 1024).toFixed(1)}MB → ${(finalSize / 1024 / 1024).toFixed(1)}MB`);
+    const compressionRatio = ((originalSize - finalSize) / originalSize * 100).toFixed(1);
+    console.log(`✅ Image compressed: ${(originalSize / 1024 / 1024).toFixed(1)}MB → ${(finalSize / 1024 / 1024).toFixed(1)}MB (${compressionRatio}% reduction)`);
     return { buffer: compressed, compressed: true, originalSize, finalSize };
     
   } catch (error) {
