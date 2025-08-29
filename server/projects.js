@@ -110,21 +110,19 @@ function validateBaseDir(baseDir) {
   return normalizedBaseDir;
 }
 
-// Lazy initialization cache for BASE_DIR validation
-let _cachedBaseDir = null;
-let _lastEnvValue = null;
+// Thread-safe BASE_DIR validation cache using Map
+const baseDirCache = new Map();
 
-// Get validated BASE_DIR with lazy initialization and environment change detection
+// Get validated BASE_DIR with concurrent-safe caching
 function getValidatedBaseDir() {
   const currentEnvValue = process.env.PROJECT_BASE_DIR || '/workspace';
   
-  // Re-validate if environment changed or cache is empty
-  if (_cachedBaseDir === null || _lastEnvValue !== currentEnvValue) {
-    _cachedBaseDir = validateBaseDir(currentEnvValue);
-    _lastEnvValue = currentEnvValue;
+  // Use Map-based caching for thread safety
+  if (!baseDirCache.has(currentEnvValue)) {
+    baseDirCache.set(currentEnvValue, validateBaseDir(currentEnvValue));
   }
   
-  return _cachedBaseDir;
+  return baseDirCache.get(currentEnvValue);
 }
 
 // Clear cache when needed (called when project files change)
@@ -255,12 +253,15 @@ async function extractProjectDirectory(projectName) {
         // Only one cwd, use it
         extractedPath = Array.from(cwdCounts.keys())[0];
       } else {
+        // Constants for CWD selection heuristics
+        const RECENT_CWD_THRESHOLD = 0.25; // 25% threshold for using recent CWD
+        
         // Multiple cwd values - prefer the most recent one if it has reasonable usage
         const mostRecentCount = cwdCounts.get(latestCwd) || 0;
         const maxCount = Math.max(...cwdCounts.values());
         
         // Use most recent if it has at least 25% of the max count
-        if (mostRecentCount >= maxCount * 0.25) {
+        if (mostRecentCount >= maxCount * RECENT_CWD_THRESHOLD) {
           extractedPath = latestCwd;
         } else {
           // Otherwise use the most frequently used cwd
@@ -446,8 +447,11 @@ async function getSessions(projectName, limit = 5, offset = 0) {
       
       processedCount++;
       
+      // Constants for early exit optimization
+      const MAX_RECENT_FILES_TO_PROCESS = 3;
+      
       // Early exit optimization: if we have enough sessions and processed recent files
-      if (allSessions.size >= (limit + offset) * 2 && processedCount >= Math.min(3, filesWithStats.length)) {
+      if (allSessions.size >= (limit + offset) * 2 && processedCount >= Math.min(MAX_RECENT_FILES_TO_PROCESS, filesWithStats.length)) {
         break;
       }
     }
@@ -762,10 +766,6 @@ async function ensureDirectoryExists(absolutePath) {
 
 // Validate project input and extract clean project name
 function validateProjectInput(projectPath) {
-  if (process.env.NODE_ENV === 'development') {
-    console.debug('🚀 validateProjectInput called with:', projectPath);
-  }
-  
   const trimmedPath = projectPath.trim();
   const inputName = path.basename(trimmedPath);
   
@@ -781,10 +781,6 @@ function validateProjectInput(projectPath) {
       trimmedPath.includes('../') || 
       trimmedPath.includes('..\\')) {
     throw new Error('유효하지 않은 프로젝트 경로입니다. 디렉토리 순회 시도는 허용되지 않습니다.');
-  }
-  
-  if (process.env.NODE_ENV === 'development') {
-    console.debug('📝 Validated input name:', inputName);
   }
   
   return inputName;
@@ -855,10 +851,6 @@ async function addProjectManually(projectPath, displayName = null) {
   // Step 2: Get validated base directory with lazy initialization
   const baseDir = getValidatedBaseDir();
   const absolutePath = path.resolve(baseDir, inputName);
-  
-  if (process.env.NODE_ENV === 'development') {
-    console.debug('🎯 Project being created in configured base directory');
-  }
   
   // Step 3: Perform comprehensive security validation
   await validateProjectSecurity(absolutePath, baseDir);
