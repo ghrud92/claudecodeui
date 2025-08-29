@@ -22,7 +22,7 @@ function buildClaudeArgs(options, settings) {
     }
   } else {
     if (trimmedCommand) {
-      commandForStdin = trimmedCommand;
+      args.push('--print', trimmedCommand);
     }
   }
   
@@ -75,21 +75,19 @@ function processStdoutData(data, ws, sessionId, processKey, sessionState) {
           sessionState.capturedSessionId = response.session_id;
           
           // Atomically update the process entry
-          const entry = activeClaudeProcesses.get(processKey);
-          if (entry && !entry.capturedSessionId) {
-            entry.capturedSessionId = sessionState.capturedSessionId;
+          activeClaudeProcesses.set(processKey, {
+            ...activeClaudeProcesses.get(processKey),
+            capturedSessionId: sessionState.capturedSessionId
+          });
+          
+          // Send session-created event if we get a new sessionId from Claude CLI
+          if (!sessionState.sessionCreatedSent && sessionState.capturedSessionId !== sessionId) {
+            sessionState.sessionCreatedSent = true;
+            console.log(`📋 Session ID updated: ${sessionId} -> ${sessionState.capturedSessionId}`);
             
-            // Send session-created event if we get a new sessionId from Claude CLI
-            if (!sessionState.sessionCreatedSent && sessionState.capturedSessionId !== sessionId) {
-              sessionState.sessionCreatedSent = true;
-              console.log(`📋 Session ID updated: ${sessionId} -> ${sessionState.capturedSessionId}`);
-              
-              // Use setImmediate to ensure WebSocket message is sent after current processing
-              setImmediate(() => {
-                if (ws && ws.readyState === 1) {
-                  ws.send(JSON.stringify({ type: 'session-created', sessionId: sessionState.capturedSessionId }));
-                }
-              });
+            // Send session-created event immediately
+            if (ws && ws.readyState === 1) {
+              ws.send(JSON.stringify({ type: 'session-created', sessionId: sessionState.capturedSessionId }));
             }
           }
         }
@@ -124,7 +122,7 @@ function setupProcessCleanup(claudeProcess, processKey, cleanup) {
 async function spawnClaude(command, options = {}, ws) {
   const spawnFunction = process.platform === 'win32' ? crossSpawn.default : child_process.spawn;
   return new Promise(async (resolve, reject) => {
-    const { sessionId, cwd, toolsSettings } = options;
+    const { sessionId, cwd, toolsSettings, resume, permissionMode } = options;
     
     // Session state for handling race conditions
     const sessionState = {
@@ -145,6 +143,7 @@ async function spawnClaude(command, options = {}, ws) {
     }, settings);
     
     const workingDir = cwd || process.cwd();
+    const trimmedCommand = command ? command.trim() : '';
     
     const tempImagePaths = [];
     let tempDir = null;
@@ -205,10 +204,6 @@ async function spawnClaude(command, options = {}, ws) {
     
     if (!resume) {
       args.push('--model', 'sonnet');
-    }
-    
-    if (permissionMode && permissionMode !== 'default') {
-      args.push('--permission-mode', permissionMode);
     }
     
     
@@ -318,5 +313,8 @@ function abortClaudeSession(sessionId) {
 
 export {
   spawnClaude,
-  abortClaudeSession
+  abortClaudeSession,
+  buildClaudeArgs,
+  processStdoutData,
+  setupProcessCleanup
 };

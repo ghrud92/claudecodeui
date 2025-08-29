@@ -44,6 +44,7 @@ describe('claude-cli', () => {
     mockWs = {
       send: vi.fn(),
       close: vi.fn(),
+      readyState: 1, // WebSocket.OPEN
     };
   });
 
@@ -135,44 +136,77 @@ describe('claude-cli', () => {
   // Test helper functions
   describe('Helper Functions', () => {
     describe('buildClaudeArgs', () => {
-      it('should build basic arguments correctly', () => {
+      it('should build basic arguments correctly', async () => {
+        const command = 'test command';
         const options = {
-          command: 'test command',
+          command,
           resume: false,
-          permissionMode: 'default'
-        };
-        const settings = {
-          allowedTools: ['Read', 'Write'],
-          disallowedTools: ['Bash'],
-          skipPermissions: false
+          permissionMode: 'default',
+          toolsSettings: {
+            allowedTools: ['Read', 'Write'],
+            disallowedTools: ['Bash'],
+            skipPermissions: false
+          }
         };
         
-        // Import the function (it would need to be exported)
-        // For now, test through spawnClaude integration
-        expect(true).toBe(true); // Placeholder - integration test covers this
+        const spawnPromise = spawnClaude(command, options, mockWs);
+        process.nextTick(() => mockProcess.emit('close', 0));
+        await spawnPromise;
+        
+        const spawnArgs = spawnFunction.mock.calls[0];
+        expect(spawnArgs[1]).toContain('--allowedTools');
+        expect(spawnArgs[1]).toContain('Read');
+        expect(spawnArgs[1]).toContain('--disallowedTools');
+        expect(spawnArgs[1]).toContain('Bash');
       });
 
-      it('should handle plan mode tools correctly', () => {
+      it('should handle plan mode tools correctly', async () => {
+        const command = 'test';
         const options = {
-          command: 'test',
-          permissionMode: 'plan'
-        };
-        const settings = {
-          allowedTools: ['Read'],
-          skipPermissions: false
+          command,
+          permissionMode: 'plan',
+          toolsSettings: {
+            allowedTools: ['Read'],
+            skipPermissions: false
+          }
         };
         
-        // Plan mode should add specific tools
-        // Integration test through spawnClaude covers this
-        expect(true).toBe(true); // Placeholder
+        const spawnPromise = spawnClaude(command, options, mockWs);
+        process.nextTick(() => mockProcess.emit('close', 0));
+        await spawnPromise;
+        
+        const spawnArgs = spawnFunction.mock.calls[0];
+        expect(spawnArgs[1]).toContain('--permission-mode');
+        expect(spawnArgs[1]).toContain('plan');
+        // Should include plan mode specific tools
+        expect(spawnArgs[1]).toContain('Task');
+        expect(spawnArgs[1]).toContain('TodoWrite');
       });
     });
 
     describe('processStdoutData', () => {
-      it('should handle JSON responses correctly', () => {
-        // This would require exporting the helper function
-        // For now, covered by integration tests
-        expect(true).toBe(true); // Placeholder
+      it('should handle JSON responses correctly', async () => {
+        const command = 'test';
+        const options = {};
+        
+        const spawnPromise = spawnClaude(command, options, mockWs);
+        
+        const jsonResponse = JSON.stringify({
+          type: 'response',
+          content: 'test content'
+        });
+        
+        process.nextTick(() => {
+          mockProcess.stdout.emit('data', jsonResponse + '\n');
+          mockProcess.emit('close', 0);
+        });
+        
+        await spawnPromise;
+        
+        // Should parse and send JSON as claude-response
+        expect(mockWs.send).toHaveBeenCalledWith(
+          JSON.stringify({ type: 'claude-response', data: { type: 'response', content: 'test content' } })
+        );
       });
 
       it('should handle non-JSON output correctly', () => {
