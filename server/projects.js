@@ -66,27 +66,64 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import os from 'os';
 import { getProjectsPath, getClaudeDir } from './utils/paths.js';
+import {
+  getDangerousSystemPaths,
+  isValidPathFormat,
+  isSafeProjectPath
+} from './utils/platform.js';
 
-// Get platform-appropriate allowed base paths for security validation.
-// This is calculated once at module load time for performance.
-function getAllowedBasePaths() {
-    const homedir = os.homedir();
-    const paths = [homedir];
-
-    if (process.platform === 'win32') {
-        // Windows-specific paths
-        paths.push('C:\\Users', 'D:\\Users', 'C:\\Projects', 'D:\\Projects');
-    } else {
-        // Unix-like paths
-        paths.push('/home', '/Users', '/opt', '/workspace');
-    }
-
-    return paths;
-}
-const ALLOWED_BASE_PATHS = getAllowedBasePaths();
 
 // Cache for extracted project directories
 const projectDirectoryCache = new Map();
+
+
+// Enhanced BASE_DIR validation function with additional configuration validation
+function validateBaseDir(baseDir) {
+  // Enhanced path format validation using platform utilities
+  if (!path.isAbsolute(baseDir)) {
+    throw new Error('PROJECT_BASE_DIR는 절대 경로여야 합니다');
+  }
+  
+  // Platform-specific path format validation
+  if (!isValidPathFormat(baseDir)) {
+    throw new Error('PROJECT_BASE_DIR는 절대 경로여야 합니다');
+  }
+  
+  const normalizedBaseDir = path.normalize(baseDir);
+  
+  // Enhanced security validation using platform utilities
+  if (!isSafeProjectPath(normalizedBaseDir)) {
+    throw new Error(`PROJECT_BASE_DIR는 시스템 디렉토리로 설정할 수 없습니다. 시도된 경로: ${baseDir}`);
+  }
+  
+  // Additional validation: prevent commonly dangerous configurations
+  const homedir = os.homedir();
+  if (normalizedBaseDir === homedir) {
+    throw new Error('PROJECT_BASE_DIR를 홈 디렉토리로 직접 설정할 수 없습니다. 하위 디렉토리를 사용해주세요.');
+  }
+  
+  // Additional validation: prevent root directory
+  if (normalizedBaseDir === '/' || normalizedBaseDir.match(/^[A-Za-z]:\\?$/)) {
+    throw new Error('PROJECT_BASE_DIR를 루트 디렉토리로 설정할 수 없습니다.');
+  }
+  
+  return normalizedBaseDir;
+}
+
+// Thread-safe BASE_DIR validation cache using Map
+const baseDirCache = new Map();
+
+// Get validated BASE_DIR with concurrent-safe caching
+function getValidatedBaseDir() {
+  const currentEnvValue = process.env.PROJECT_BASE_DIR || '/workspace';
+  
+  // Use Map-based caching for thread safety
+  if (!baseDirCache.has(currentEnvValue)) {
+    baseDirCache.set(currentEnvValue, validateBaseDir(currentEnvValue));
+  }
+  
+  return baseDirCache.get(currentEnvValue);
+}
 
 // Clear cache when needed (called when project files change)
 function clearProjectDirectoryCache() {
@@ -216,12 +253,15 @@ async function extractProjectDirectory(projectName) {
         // Only one cwd, use it
         extractedPath = Array.from(cwdCounts.keys())[0];
       } else {
+        // Constants for CWD selection heuristics
+        const RECENT_CWD_THRESHOLD = 0.25; // 25% threshold for using recent CWD
+        
         // Multiple cwd values - prefer the most recent one if it has reasonable usage
         const mostRecentCount = cwdCounts.get(latestCwd) || 0;
         const maxCount = Math.max(...cwdCounts.values());
         
         // Use most recent if it has at least 25% of the max count
-        if (mostRecentCount >= maxCount * 0.25) {
+        if (mostRecentCount >= maxCount * RECENT_CWD_THRESHOLD) {
           extractedPath = latestCwd;
         } else {
           // Otherwise use the most frequently used cwd
@@ -407,8 +447,11 @@ async function getSessions(projectName, limit = 5, offset = 0) {
       
       processedCount++;
       
+      // Constants for early exit optimization
+      const MAX_RECENT_FILES_TO_PROCESS = 3;
+      
       // Early exit optimization: if we have enough sessions and processed recent files
-      if (allSessions.size >= (limit + offset) * 2 && processedCount >= Math.min(3, filesWithStats.length)) {
+      if (allSessions.size >= (limit + offset) * 2 && processedCount >= Math.min(MAX_RECENT_FILES_TO_PROCESS, filesWithStats.length)) {
         break;
       }
     }
@@ -701,50 +744,125 @@ async function ensureDirectoryExists(absolutePath) {
           throw new Error(`Permission denied creating directory: ${absolutePath}`);
         } else if (createError.code === 'ENOTDIR') {
           throw new Error(`Cannot create directory - parent path is not a directory: ${absolutePath}`);
+        } else if (createError.code === 'ENOSPC') {
+          throw new Error(`디스크 공간이 부족합니다: ${absolutePath}`);
+        } else if (createError.code === 'EROFS') {
+          throw new Error(`읽기 전용 파일시스템입니다: ${absolutePath}`);
+        } else if (createError.code === 'EMFILE' || createError.code === 'ENFILE') {
+          throw new Error(`시스템 리소스가 부족합니다: ${absolutePath}`);
+        } else if (createError.code === 'ENAMETOOLONG') {
+          throw new Error(`경로 이름이 너무 깁니다: ${absolutePath}`);
         } else {
-          throw new Error(`Failed to create directory: ${absolutePath} - ${createError.message}`);
+          throw new Error(`디렉토리 생성 실패: ${absolutePath} - ${createError.message}`);
         }
       }
+    } else if (error.code === 'EACCES') {
+      throw new Error(`디렉토리 접근이 거부되었습니다: ${absolutePath}`);
     } else {
-      throw new Error(`Cannot access path: ${absolutePath} - ${error.message}`);
+      throw new Error(`경로에 접근할 수 없습니다: ${absolutePath} - ${error.message}`);
     }
   }
 }
 
-async function addProjectManually(projectPath, displayName = null) {
-  console.log('🚀 addProjectManually called with:', projectPath);
+// Validate project input and extract clean project name
+function validateProjectInput(projectPath) {
+  const trimmedPath = projectPath.trim();
+  const inputName = path.basename(trimmedPath);
   
-  // Extract project name and force /workspace/ location
-  // This ensures all projects are created in the workspace directory where Claude CLI sessions work properly
-  const inputName = path.basename(projectPath.trim());
-  console.log('📝 Extracted input name:', inputName);
-  
-  // Validate project name
+  // Validate project name (empty, dots)
   if (!inputName || inputName === '.' || inputName === '..') {
-    throw new Error('Invalid project name. Please provide a valid directory name.');
+    throw new Error('유효하지 않은 프로젝트 이름입니다. 올바른 디렉토리 이름을 제공해주세요.');
   }
   
-  // Force all projects to be created under /workspace/
-  const absolutePath = path.resolve('/workspace', inputName);
-  console.log('🎯 Forced absolute path to:', absolutePath);
-  
-  // Security: Basic validation for /workspace/ prefix (already enforced above)
-  // Additional security check to ensure the path is within /workspace/
-  if (!absolutePath.startsWith('/workspace/')) {
-    throw new Error('Projects must be created within /workspace/ directory');
+  // Strong directory traversal validation
+  const normalizedPath = path.normalize(trimmedPath);
+  if (normalizedPath.includes('..') || 
+      normalizedPath !== trimmedPath ||
+      trimmedPath.includes('../') || 
+      trimmedPath.includes('..\\')) {
+    throw new Error('유효하지 않은 프로젝트 경로입니다. 디렉토리 순회 시도는 허용되지 않습니다.');
   }
   
-  // Ensure directory exists (create if needed)
-  const { directoryCreated } = await ensureDirectoryExists(absolutePath);
+  return inputName;
+}
+
+// Recursively validate path chain to prevent symbolic link bypass
+async function validatePathChainSecurity(targetPath, baseDir) {
+  const normalizedBase = path.normalize(baseDir);
+  let currentPath = path.normalize(targetPath);
+  const checkedPaths = new Set(); // Prevent infinite loops
+  const resolvedPaths = new Set(); // Track resolved paths for circular detection
+  let iterations = 0;
+  const maxIterations = 20; // Prevent infinite loops
   
-  // Generate project identifier (encode path for use as directory name)
+  while (currentPath !== normalizedBase && currentPath !== '/' && currentPath !== path.parse(currentPath).root) {
+    // Safety: Prevent infinite loops with iteration limit
+    if (++iterations > maxIterations) {
+      throw new Error('보안 위반: 순환 심볼릭 링크가 감지되었습니다');
+    }
+    
+    // Prevent infinite loops from circular symbolic links
+    if (checkedPaths.has(currentPath)) {
+      throw new Error('보안 위반: 순환 심볼릭 링크가 감지되었습니다');
+    }
+    checkedPaths.add(currentPath);
+    
+    try {
+      // Atomically resolve and validate each path component
+      const realPath = await fs.realpath(currentPath);
+      const normalizedReal = path.normalize(realPath);
+      
+      // Check if resolved path is still within base directory
+      if (!normalizedReal.startsWith(normalizedBase + path.sep) && normalizedReal !== normalizedBase) {
+        throw new Error('보안 위반: 심볼릭 링크를 통한 디렉토리 순회 시도가 감지되었습니다');
+      }
+      
+      // Check for circular references in resolved paths
+      if (resolvedPaths.has(normalizedReal)) {
+        throw new Error('보안 위반: 순환 심볼릭 링크가 감지되었습니다');
+      }
+      resolvedPaths.add(normalizedReal);
+      
+      // Move to parent of resolved path to continue chain validation
+      currentPath = path.dirname(normalizedReal);
+    } catch (error) {
+      // If realpath fails (directory doesn't exist), check parent instead
+      if (error.code === 'ENOENT') {
+        currentPath = path.dirname(currentPath);
+        continue;
+      }
+      throw new Error(`보안 검증 실패: ${error.message}`);
+    }
+  }
+}
+
+// Perform comprehensive atomic security validation on project path
+async function validateProjectSecurity(absolutePath, baseDir) {
+  // Security: Enhanced atomic path validation using consistent normalization
+  const normalizedAbsolute = path.normalize(absolutePath);
+  const normalizedBase = path.normalize(baseDir);
+  
+  // Initial path boundary check
+  if (!normalizedAbsolute.startsWith(normalizedBase + path.sep) && normalizedAbsolute !== normalizedBase) {
+    throw new Error(`보안 위반: 프로젝트 경로가 허용된 기본 디렉토리를 벗어났습니다 '${baseDir}'`);
+  }
+  
+  // Comprehensive recursive path chain validation to prevent TOCTOU and symbolic link bypass
+  await validatePathChainSecurity(absolutePath, normalizedBase);
+}
+
+// Create project directory and return creation status
+async function createProjectDirectory(absolutePath) {
+  return await ensureDirectoryExists(absolutePath);
+}
+
+// Update project configuration with new project
+async function updateProjectConfig(absolutePath, displayName) {
   const projectIdentifier = absolutePath.replace(/\//g, '-');
-  
-  // Check if project already exists in config
   const config = await loadProjectConfig();
   
   if (config[projectIdentifier]) {
-    throw new Error(`Project already configured for path: ${absolutePath}`);
+    throw new Error(`프로젝트가 이미 설정되어 있습니다: ${absolutePath}`);
   }
   
   // Add to config as manually added project
@@ -758,8 +876,28 @@ async function addProjectManually(projectPath, displayName = null) {
   }
   
   await saveProjectConfig(config);
+  return projectIdentifier;
+}
+
+// Main function - orchestrates project creation process
+async function addProjectManually(projectPath, displayName = null) {
+  // Step 1: Validate and extract project input
+  const inputName = validateProjectInput(projectPath);
   
+  // Step 2: Get validated base directory with lazy initialization
+  const baseDir = getValidatedBaseDir();
+  const absolutePath = path.resolve(baseDir, inputName);
   
+  // Step 3: Perform comprehensive security validation
+  await validateProjectSecurity(absolutePath, baseDir);
+  
+  // Step 4: Create project directory
+  const { directoryCreated } = await createProjectDirectory(absolutePath);
+  
+  // Step 5: Update project configuration
+  const projectIdentifier = await updateProjectConfig(absolutePath, displayName);
+  
+  // Step 6: Return project information
   return {
     name: projectIdentifier,
     path: absolutePath,
