@@ -712,7 +712,10 @@ async function ensureDirectoryExists(absolutePath) {
 }
 
 async function addProjectManually(projectPath, displayName = null) {
-  console.log('🚀 addProjectManually called with:', projectPath);
+  // 개발/디버그 모드에서만 로깅
+  if (process.env.NODE_ENV === 'development') {
+    console.debug('🚀 addProjectManually called with:', projectPath);
+  }
   
   // Extract project name - validate for directory traversal attempts
   const trimmedPath = projectPath.trim();
@@ -720,22 +723,42 @@ async function addProjectManually(projectPath, displayName = null) {
     throw new Error('Invalid project path. Directory traversal attempts are not allowed.');
   }
   const inputName = path.basename(trimmedPath);
-  console.log('📝 Extracted input name:', inputName);
+  if (process.env.NODE_ENV === 'development') {
+    console.debug('📝 Extracted input name:', inputName);
+  }
   
   // Validate project name
   if (!inputName || inputName === '.' || inputName === '..') {
     throw new Error('Invalid project name. Please provide a valid directory name.');
   }
   
-  // Use PROJECT_BASE_DIR environment variable or default to /workspace/
-  const baseDir = process.env.PROJECT_BASE_DIR || '/workspace';
+  // Validate and get PROJECT_BASE_DIR environment variable or default to /workspace/
+  function validateBaseDir(baseDir) {
+    // 절대 경로 검증
+    if (!path.isAbsolute(baseDir)) {
+      throw new Error('PROJECT_BASE_DIR must be an absolute path');
+    }
+    
+    // 위험한 시스템 디렉토리 차단
+    const dangerousPaths = ['/etc', '/usr', '/var', '/sys', '/proc', '/boot', '/bin', '/sbin'];
+    const normalizedBaseDir = path.normalize(baseDir);
+    if (dangerousPaths.some(dangerous => normalizedBaseDir.startsWith(dangerous))) {
+      throw new Error(`PROJECT_BASE_DIR cannot be set to system directories. Attempted: ${baseDir}`);
+    }
+    
+    return normalizedBaseDir;
+  }
+  
+  const baseDir = validateBaseDir(process.env.PROJECT_BASE_DIR || '/workspace');
   const absolutePath = path.resolve(baseDir, inputName);
-  console.log('🎯 Resolved absolute path to:', absolutePath);
+  if (process.env.NODE_ENV === 'development') {
+    console.debug('🎯 Resolved absolute path to:', absolutePath);
+  }
   
   // Security: Basic validation to ensure the path is within the configured base directory
   // Additional security check to prevent directory traversal attacks
   if (!absolutePath.startsWith(path.resolve(baseDir) + path.sep)) {
-    throw new Error(`Projects must be created within ${baseDir} directory`);
+    throw new Error(`Security violation: Project path '${absolutePath}' is outside allowed base directory '${baseDir}'`);
   }
   
   // Ensure directory exists (create if needed)

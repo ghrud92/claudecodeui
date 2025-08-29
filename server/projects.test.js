@@ -86,4 +86,54 @@ describe('addProjectManually - PROJECT_BASE_DIR functionality', () => {
     const expectedIdentifier = expectedPath.replace(/\//g, '-');
     expect(result.name).toBe(expectedIdentifier);
   });
+
+  it('should throw error for system directories in PROJECT_BASE_DIR', async () => {
+    const systemDirs = ['/etc', '/usr', '/var', '/sys', '/proc', '/boot', '/bin', '/sbin'];
+    
+    for (const systemDir of systemDirs) {
+      process.env.PROJECT_BASE_DIR = systemDir + '/sensitive';
+      
+      await expect(addProjectManually('test-project')).rejects.toThrow(
+        'PROJECT_BASE_DIR cannot be set to system directories'
+      );
+    }
+  });
+
+  it('should throw error for relative paths in PROJECT_BASE_DIR', async () => {
+    process.env.PROJECT_BASE_DIR = './relative/path';
+    
+    await expect(addProjectManually('test-project')).rejects.toThrow(
+      'PROJECT_BASE_DIR must be an absolute path'
+    );
+  });
+
+  it('should handle Windows-style path separators', async () => {
+    // Test multiple Windows-style patterns
+    await expect(addProjectManually('..\\sensitive')).rejects.toThrow(
+      'Invalid project path. Directory traversal attempts are not allowed.'
+    );
+    
+    await expect(addProjectManually('..\\..\\etc\\passwd')).rejects.toThrow(
+      'Invalid project path. Directory traversal attempts are not allowed.'
+    );
+  });
+
+  it('should provide detailed security violation messages', async () => {
+    process.env.PROJECT_BASE_DIR = '/safe/projects';
+    
+    // Mock path.resolve to simulate a case where directory traversal bypasses initial check
+    const originalResolve = path.resolve;
+    vi.spyOn(path, 'resolve').mockImplementation((...args) => {
+      if (args.length === 2 && args[0] === '/safe/projects' && args[1] === 'test') {
+        return '/unsafe/location/test'; // Simulate security violation
+      }
+      return originalResolve(...args);
+    });
+
+    await expect(addProjectManually('test')).rejects.toThrow(
+      "Security violation: Project path '/unsafe/location/test' is outside allowed base directory '/safe/projects'"
+    );
+
+    path.resolve.mockRestore();
+  });
 });
