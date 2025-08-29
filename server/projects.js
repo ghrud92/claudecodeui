@@ -714,9 +714,12 @@ async function ensureDirectoryExists(absolutePath) {
 async function addProjectManually(projectPath, displayName = null) {
   console.log('🚀 addProjectManually called with:', projectPath);
   
-  // Extract project name and force /workspace/ location
-  // This ensures all projects are created in the workspace directory where Claude CLI sessions work properly
-  const inputName = path.basename(projectPath.trim());
+  // Extract project name - validate for directory traversal attempts
+  const trimmedPath = projectPath.trim();
+  if (trimmedPath.includes('../') || trimmedPath.includes('..\\')) {
+    throw new Error('Invalid project path. Directory traversal attempts are not allowed.');
+  }
+  const inputName = path.basename(trimmedPath);
   console.log('📝 Extracted input name:', inputName);
   
   // Validate project name
@@ -724,14 +727,15 @@ async function addProjectManually(projectPath, displayName = null) {
     throw new Error('Invalid project name. Please provide a valid directory name.');
   }
   
-  // Force all projects to be created under /workspace/
-  const absolutePath = path.resolve('/workspace', inputName);
-  console.log('🎯 Forced absolute path to:', absolutePath);
+  // Use PROJECT_BASE_DIR environment variable or default to /workspace/
+  const baseDir = process.env.PROJECT_BASE_DIR || '/workspace';
+  const absolutePath = path.resolve(baseDir, inputName);
+  console.log('🎯 Resolved absolute path to:', absolutePath);
   
-  // Security: Basic validation for /workspace/ prefix (already enforced above)
-  // Additional security check to ensure the path is within /workspace/
-  if (!absolutePath.startsWith('/workspace/')) {
-    throw new Error('Projects must be created within /workspace/ directory');
+  // Security: Basic validation to ensure the path is within the configured base directory
+  // Additional security check to prevent directory traversal attacks
+  if (!absolutePath.startsWith(path.resolve(baseDir) + path.sep)) {
+    throw new Error(`Projects must be created within ${baseDir} directory`);
   }
   
   // Ensure directory exists (create if needed)
