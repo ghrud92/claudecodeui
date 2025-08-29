@@ -3,9 +3,64 @@ import * as crossSpawn from 'cross-spawn';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+import sharp from 'sharp';
 
 // Use cross-spawn on Windows for better command execution
 let activeClaudeProcesses = new Map(); // Track active processes by session ID
+
+// Smart image compression for large files
+async function compressImageIfNeeded(buffer, mimeType, maxSize = 10 * 1024 * 1024) {
+  const originalSize = buffer.length;
+  
+  // If already under 10MB, no compression needed
+  if (originalSize <= maxSize) {
+    return { buffer, compressed: false, originalSize, finalSize: originalSize };
+  }
+  
+  console.log(`🗜️ Compressing large image: ${(originalSize / 1024 / 1024).toFixed(1)}MB`);
+  
+  try {
+    let sharpImage = sharp(buffer);
+    const metadata = await sharpImage.metadata();
+    
+    // Smart compression strategy based on image type and size
+    if (mimeType === 'image/png') {
+      // PNG screenshots: convert to JPEG with high quality for better compression
+      sharpImage = sharpImage.jpeg({ quality: 85, progressive: true });
+    } else if (mimeType === 'image/jpeg') {
+      // JPEG: reduce quality progressively until under limit
+      let quality = 80;
+      let compressed;
+      
+      do {
+        compressed = await sharp(buffer).jpeg({ quality, progressive: true }).toBuffer();
+        if (compressed.length <= maxSize || quality <= 40) break;
+        quality -= 10;
+      } while (quality > 40);
+      
+      const finalSize = compressed.length;
+      console.log(`✅ JPEG compressed: ${(originalSize / 1024 / 1024).toFixed(1)}MB → ${(finalSize / 1024 / 1024).toFixed(1)}MB (${quality}% quality)`);
+      return { buffer: compressed, compressed: true, originalSize, finalSize };
+    }
+    
+    // For PNG screenshots, also try resizing if still too large
+    if (metadata.width > 1920) {
+      const scale = Math.min(1920 / metadata.width, 1080 / metadata.height);
+      sharpImage = sharpImage.resize(Math.round(metadata.width * scale), Math.round(metadata.height * scale));
+      console.log(`📐 Resizing image: ${metadata.width}x${metadata.height} → ${Math.round(metadata.width * scale)}x${Math.round(metadata.height * scale)}`);
+    }
+    
+    const compressed = await sharpImage.toBuffer();
+    const finalSize = compressed.length;
+    
+    console.log(`✅ Image compressed: ${(originalSize / 1024 / 1024).toFixed(1)}MB → ${(finalSize / 1024 / 1024).toFixed(1)}MB`);
+    return { buffer: compressed, compressed: true, originalSize, finalSize };
+    
+  } catch (error) {
+    console.error('❌ Compression failed, using original:', error.message);
+    return { buffer, compressed: false, originalSize, finalSize: originalSize };
+  }
+}
 
 // Helper function to build Claude CLI arguments
 function buildClaudeArgs(options, settings) {
@@ -162,27 +217,40 @@ async function spawnClaude(command, options = {}, ws) {
           }
           const [, mimeType, base64Data] = matches;
           
-          // File size validation (2MB limit)
-          const buffer = Buffer.from(base64Data, 'base64');
-          const maxSize = 2 * 1024 * 1024; // 2MB
-          if (buffer.length > maxSize) {
-            console.error(`❌ Image ${index} too large: ${(buffer.length / 1024 / 1024).toFixed(2)}MB > 2MB`);
-            continue;
-          }
-          
-          // MIME type validation
+          // Initial buffer creation and MIME type validation
+          const originalBuffer = Buffer.from(base64Data, 'base64');
           const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
           if (!allowedTypes.includes(mimeType)) {
             console.error(`❌ Unsupported image type: ${mimeType}`);
             continue;
           }
           
-          const extension = mimeType.split('/')[1] || 'png';
-          const filename = `image_${index}.${extension}`;
+          // Hard limit: 50MB raw file size (before compression)
+          const hardLimit = 50 * 1024 * 1024;
+          if (originalBuffer.length > hardLimit) {
+            console.error(`❌ Image ${index} exceeds hard limit: ${(originalBuffer.length / 1024 / 1024).toFixed(1)}MB > 50MB`);
+            continue;
+          }
+          
+          // Smart compression for large files (target: 10MB)
+          const { buffer: finalBuffer, compressed, originalSize, finalSize } = await compressImageIfNeeded(originalBuffer, mimeType);
+          
+          // Determine final extension (might change due to PNG→JPEG conversion)
+          let finalExtension = mimeType.split('/')[1] || 'png';
+          if (compressed && mimeType === 'image/png' && finalBuffer !== originalBuffer) {
+            finalExtension = 'jpg'; // PNG was converted to JPEG
+          }
+          
+          const filename = `image_${index}.${finalExtension}`;
           const filepath = path.join(tempDir, filename);
-          await fs.writeFile(filepath, buffer);
+          await fs.writeFile(filepath, finalBuffer);
           tempImagePaths.push(filepath);
-          console.log(`📁 Saved image: ${filename} (${(buffer.length / 1024).toFixed(1)}KB)`);
+          
+          if (compressed) {
+            console.log(`📁 Saved compressed image: ${filename} (${(originalSize / 1024).toFixed(1)}KB → ${(finalSize / 1024).toFixed(1)}KB)`);
+          } else {
+            console.log(`📁 Saved image: ${filename} (${(finalSize / 1024).toFixed(1)}KB)`);
+          }
         }
         
         if (tempImagePaths.length > 0 && trimmedCommand) {
@@ -341,5 +409,6 @@ export {
   abortClaudeSession,
   buildClaudeArgs,
   processStdoutData,
-  setupProcessCleanup
+  setupProcessCleanup,
+  compressImageIfNeeded
 };
